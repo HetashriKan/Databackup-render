@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Login with Google (GIS)</title>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- <script>
+    function handleCredentialResponse(response) {
+      fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential: response.credential })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          document.body.innerHTML = `
+            <h1>Hello, ${data.user.name}</h1>
+            <img src="${data.user.picture}" />
+            <p>Email: ${data.user.email}</p>
+          `;
+        } else {
+          alert('Login failed');
+        }
+      });
+    }
+  </script> -->
+  <script>
+    function redirectToSalesforce() {
+      const salesforceUrl = "https://your-salesforce-instance.my.salesforce.com";
+
+      setTimeout(() => {
+        if (window.opener) {
+          window.close();
+        }
+      }, 5000); // 5 seconds
+    }
+
+    window.onload = redirectToSalesforce;
+  </script>
+</head>
+<body>
+  <h1>Success</h1>
+  <!-- <div id="g_id_onload"
+       data-client_id="141325505790-249oagrne10g4ogh4n94aqk51vo7lkh6.apps.googleusercontent.com"
+       data-callback="handleCredentialResponse">
+  </div> -->
+  <!-- <div class="g_id_signin" data-type="standard"></div> -->
+   <div>
+    You have been authenticated with google drive. This Page will close in 5 seconds. Refresh the salesforce page once to get the updated configurations.
+   </div>
+</body>
+</html>
