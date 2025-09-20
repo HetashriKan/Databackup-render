@@ -192,8 +192,8 @@ const backupController = async (req, res) => {
 
     for (const [objectName, soql] of Object.entries(backupData)) {
       const queryResult = await conn.query(soql);
-      console.log("queryResult " + JSON.stringify(queryResult));
-      console.log("queryResult records" + JSON.stringify(queryResult.records));
+      // console.log("queryResult " + JSON.stringify(queryResult));
+      // console.log("queryResult records" + JSON.stringify(queryResult.records));
       summary.totalObjects++;
       summary.totalRecords += queryResult.totalSize;
 
@@ -253,6 +253,7 @@ const backupController = async (req, res) => {
 
           currentCsvStream.write(rest);
           fileSizeTracker += rowSize;
+          recordsInCurrentFile++;   
         }
 
         // End the last stream and upload the last file if it has content
