@@ -87,7 +87,8 @@ router.get("/auth/google", async (req, res) => {
         user.clientId,
         user.clientSecret,
         // 'https://databackup-server.onrender.com/api/auth/google/callback'
-      'http://localhost:3000/api/auth/google/callback'
+      // 'http://localhost:3000/api/auth/google/callback'
+      'https://databackup-render.onrender.com/api/auth/google/callback'
       );
       const url = oauth2Client.generateAuthUrl({
       access_type: "offline",          // get refresh_token
