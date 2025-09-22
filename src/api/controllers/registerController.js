@@ -4,9 +4,9 @@ const path = require('path');
 const pool = require('../../../config/configuration');
 
 const generateCertificate = async (req, res) => {
-  const { name, companyName, email, city, state, username, clientId, baseUrl, org_id } = req.body;
+  const { name, companyName, email, city, state, username, clientId, baseUrl, org_id, instanceUrl } = req.body;
 
-  if (!name || !companyName || !email || !city || !state || !username || !clientId || !baseUrl) {
+  if (!name || !companyName || !email || !city || !state || !username || !clientId || !baseUrl || !org_id || !instanceUrl) {
     return res.status(400).json({ message: 'Missing required fields.' });
   }
 
@@ -30,7 +30,7 @@ const generateCertificate = async (req, res) => {
       const connection = await pool.getConnection();
       await connection.query(
         'INSERT INTO salesforce_orgs (name, email, companyName, city, state, instance_url, client_id, salesforce_api_jwt_private_key, salesforce_api_username, base_url, created_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)',
-        [name, email, companyName, city, state, baseUrl, clientId, privateKey, username, baseUrl, org_id]
+        [name, email, companyName, city, state, instanceUrl, clientId, privateKey, username, baseUrl, org_id]
       );
       connection.release();
 

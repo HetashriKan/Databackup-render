@@ -171,7 +171,7 @@ const backupController = async (req, res) => {
       algorithm: "RS256",
     });
 
-    const conn = new Connection({ loginUrl: org.base_url, serverUrl: org.instance_url });
+    const conn = new Connection({ loginUrl: org.base_url  });
     await conn.authorize({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion: signedJWT,

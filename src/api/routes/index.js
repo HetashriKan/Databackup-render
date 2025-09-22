@@ -1,25 +1,25 @@
 const express = require("express");
 const authenticateSalesforceToken = require("../../middlewares/authenticateSalesforceToken");
 const generateAccessToken = require("../controllers");
-const jwt = require('jsonwebtoken')
+const jwt = require("jsonwebtoken");
 const router = express.Router();
-const { google } = require('googleapis');
+const { google } = require("googleapis");
 const pool = require("../../../config/configuration");
 const { randomUUID } = require("crypto");
 
 let oauth2Client;
 const Id = randomUUID();
 
-
 router.use("/backup", require("./backup"));
 router.use("/register", require("./register"));
+router.use("/refresh-token", require("./refreshAccessToken"));
 
 // /api/health
 router.route("/health").get(async (req, res) => {
   // Health check – responds with 200 OK, service uptime, and DB status
   try {
     res.status(200).json({
-      msg: "Hello World"
+      msg: "Hello World",
     });
   } catch (err) {
     res.status(400).json({
@@ -33,7 +33,7 @@ router.route("/health").get(async (req, res) => {
 router.route("/").get(async (req, res) => {
   try {
     res.status(200).json({
-      msg: "Hello World"
+      msg: "Hello World",
     });
   } catch (err) {
     res.status(400).json({
@@ -43,17 +43,17 @@ router.route("/").get(async (req, res) => {
   }
 });
 
-router.route("/token").get(authenticateSalesforceToken,async (req,res)=>{
-  if(req.user){
+router.route("/token").get(authenticateSalesforceToken, async (req, res) => {
+  if (req.user) {
     // VERIFY USER FROM DB
 
     const accessToken = await generateAccessToken(req.user);
 
-    res.status(200).json({token : accessToken}); // ,user : req.user
-  }else{
-    res.status(404).json({msg:'user not found'});
+    res.status(200).json({ token: accessToken }); // ,user : req.user
+  } else {
+    res.status(404).json({ msg: "user not found" });
   }
-})
+});
 
 /**
  * GOOGLE OAUTH2 LOGIN FLOW
@@ -80,33 +80,42 @@ router.get("/auth/google", async (req, res) => {
     console.log("orgDetails client id: ", orgDetails[0].client_id);
     user = jwt.verify(token, orgDetails[0].client_id);
     // user - clientId, clientSecret, orgId, orgbaseUrl -> drive_account
-  console.log('user : ',user );
+    console.log("user : ", user);
 
-  if(user){
+    if (user) {
       oauth2Client = new google.auth.OAuth2(
         user.clientId,
         user.clientSecret,
         // 'https://databackup-server.onrender.com/api/auth/google/callback'
-      // 'http://localhost:3000/api/auth/google/callback'
-      'https://databackup-render.onrender.com/api/auth/google/callback'
+        // 'http://localhost:3000/api/auth/google/callback'
+        "https://databackup-render.onrender.com/api/auth/google/callback"
       );
       const url = oauth2Client.generateAuthUrl({
-      access_type: "offline",          // get refresh_token
-      prompt: "consent",               // force consent each time (for dev)
-      scope: [
-        "profile",
-        "email",
-        "https://www.googleapis.com/auth/drive"
-      ]
+        access_type: "offline", // get refresh_token
+        prompt: "consent", // force consent each time (for dev)
+        scope: ["profile", "email", "https://www.googleapis.com/auth/drive"],
       });
-    const results = pool.query(`INSERT INTO drive_accounts (salesforce_org_id, google_client_id, google_client_secret) VALUES (?, ?,?)`,[user.iss, user.clientId,user.clientSecret]);
-      // console.log('results : ',results);
-    console.log('stored successfully')
-    if(results.length === 0){
-      throw new Error('Error Creating Drive Account');
-    }
-    else {
-        res.redirect(url);
+      const connection = await pool.getConnection();
+      const [orgDetails] = await connection.query(
+        "SELECT salesforce_org_id FROM drive_accounts WHERE salesforce_org_id = ?",
+        [user.iss]
+      );
+
+      if (orgDetails.length > 0) {
+        return res
+          .status(400)
+          .send({ message: "Drive Account Already Exists" });
+      } else {
+        const results = await connection.query(
+          `INSERT INTO drive_accounts (salesforce_org_id, google_client_id, google_client_secret) VALUES (?, ?,?)`,
+          [user.iss, user.clientId, user.clientSecret]
+        );
+        console.log("stored successfully");
+        if (results.length === 0) {
+          throw new Error("Error Creating Drive Account");
+        } else {
+          res.redirect(url);
+        }
       }
     }
   } catch (err) {
@@ -134,15 +143,18 @@ router.get("/auth/google/callback", async (req, res) => {
     console.log("userrr", user);
     console.log("userrr orgid", user.iss);
     // console.log("Tokens:", tokens);
-    const results = await pool.query(`UPDATE drive_accounts SET google_access_token = ?, google_refresh_token = ? WHERE salesforce_org_id = ?`,[tokens.access_token, tokens.refresh_token, user.iss])
+    const results = await pool
+      .query(
+        `UPDATE drive_accounts SET google_access_token = ?, google_refresh_token = ? WHERE salesforce_org_id = ?`,
+        [tokens.access_token, tokens.refresh_token, user.iss]
+      )
       .then((results) => {
         console.log("Stored token successfully");
-      res.sendFile(__dirname+'/public/');
+        res.sendFile(__dirname + "/public/");
       })
       .catch((err) => {
         console.error("Error storing token:", err);
       });
-
   } catch (err) {
     console.error("Google Auth Error:", err);
     res.status(401).json({ success: false, message: "Auth failed" });
@@ -161,7 +173,7 @@ router.get("/drive", async (req, res) => {
     const drive = google.drive({ version: "v3", auth: oauth2Client });
     const result = await drive.files.list({
       pageSize: 10,
-      fields: "files(id, name)"
+      fields: "files(id, name)",
     });
 
     res.json(result.data.files);
@@ -173,18 +185,17 @@ router.get("/drive", async (req, res) => {
 // /api
 router.route("/").get(authenticateSalesforceToken, async (req, res) => {
   try {
-    if(req.user){
-      console.log('user : '+req.user);
+    if (req.user) {
+      console.log("user : " + req.user);
       res.status(200).json({
         msg: "Hello World",
-        user : req.user,
-        verified : true
+        user: req.user,
+        verified: true,
       });
-    }else{
+    } else {
       res.status(200).json({
-        msg : "No User Was Verified"
-      })
-
+        msg: "No User Was Verified",
+      });
     }
   } catch (err) {
     res.status(400).json({
