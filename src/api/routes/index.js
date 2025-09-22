@@ -101,11 +101,11 @@ router.get("/auth/google", async (req, res) => {
         [user.iss]
       );
 
-      if (orgDetails.length > 0) {
-        return res
-          .status(400)
-          .send({ message: "Drive Account Already Exists" });
-      } else {
+      // if (orgDetails.length > 0) {
+        // return res
+        //   .status(400)
+        //   .send({ message: "Drive Account Already Exists" });
+      // } else {
         const results = await connection.query(
           `INSERT INTO drive_accounts (salesforce_org_id, google_client_id, google_client_secret) VALUES (?, ?,?)`,
           [user.iss, user.clientId, user.clientSecret]
@@ -115,8 +115,9 @@ router.get("/auth/google", async (req, res) => {
           throw new Error("Error Creating Drive Account");
         } else {
           res.redirect(url);
+          return;
         }
-      }
+      // }
     }
   } catch (err) {
     console.log(err);
