@@ -18,9 +18,11 @@ const refreshAccessTokenController = async (req, res) => {
         const orgDetails = rows[0]; 
         console.log('orgDetails ', orgDetails);
         if (!orgDetails) {
+            console.log('Salesforce Org not found');
+            
             return res.status(404).send({ message: 'Salesforce Org not found' });
         }
-
+        console.log("before response");
         const response = await axios.post('https://oauth2.googleapis.com/token', null, {
             params: {
                 client_id: orgDetails.google_client_id,
@@ -29,7 +31,7 @@ const refreshAccessTokenController = async (req, res) => {
                 grant_type: 'refresh_token',
             },
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/x-www-form-urlencoded'
             }
         })
 
