@@ -4,6 +4,8 @@ const getOrgDetails = require("./../../utils/getOrgDetails")
 
 const refreshAccessTokenController = async (req, res) => {
     const { refreshToken,salesforce_org_id } = req.body;
+    console.log("refreshToken ",refreshToken);
+    console.log("salesforce_org_id ",salesforce_org_id);
     
     try {
         const connection = await pool.getConnection();
@@ -14,7 +16,7 @@ const refreshAccessTokenController = async (req, res) => {
         );
         
         const orgDetails = rows[0]; 
-        // console.log('orgDetails ', orgDetails);
+        console.log('orgDetails ', orgDetails);
         if (!orgDetails) {
             return res.status(404).send({ message: 'Salesforce Org not found' });
         }
@@ -34,7 +36,7 @@ const refreshAccessTokenController = async (req, res) => {
         // console.log("Google OAuth response status:", response.status);
         // console.log("Google OAuth response data:", response.data)
         
-        // console.log("response ",response);
+        console.log("response ",response);
         
         const { access_token, expires_in } = response.data;
         
