@@ -145,7 +145,7 @@ const backupController = async (req, res) => {
   try {
     //  Get Org + Drive details with joins
     const [orgDetails] = await connection.query(
-      `SELECT o.org_id, o.client_id, o.salesforce_api_username, o.salesforce_api_jwt_private_key, o.base_url,
+      `SELECT o.org_id, o.client_id, o.salesforce_api_username, o.salesforce_api_jwt_private_key, o.base_url, o.instance_url,
               d.google_access_token
        FROM salesforce_orgs o
        JOIN drive_accounts d ON o.org_id = d.salesforce_org_id
@@ -158,6 +158,7 @@ const backupController = async (req, res) => {
     }
 
     const org = orgDetails[0];
+    console.log("org details " + JSON.stringify(org));
 
     // Salesforce JWT Auth
     const claim = {
@@ -170,7 +171,7 @@ const backupController = async (req, res) => {
       algorithm: "RS256",
     });
 
-    const conn = new Connection({ loginUrl: org.base_url });
+    const conn = new Connection({ loginUrl: org.base_url, serverUrl: org.instance_url });
     await conn.authorize({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion: signedJWT,
@@ -297,6 +298,9 @@ const backupController = async (req, res) => {
       ]
     );
 
+    // console.log("org id " + org.org_id);
+    // console.log("drive account id " + org.drive_id);
+    // console.log("target folder id " + org.target_folder_id);
     // await connection.query(
     //   `INSERT INTO org_drive_mappings (org_id, drive_account_id, target_folder_id)
     //        VALUES (?, ?, ?)`,
