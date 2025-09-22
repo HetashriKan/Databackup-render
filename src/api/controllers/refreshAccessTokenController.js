@@ -29,7 +29,7 @@ const refreshAccessTokenController = async (req, res) => {
                 grant_type: 'refresh_token',
             },
             headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
+                'Content-Type': 'application/json'
             }
         })
 
