@@ -8,7 +8,7 @@ const skippedFields = {
 
         "Contact": {
             "field": [
-                "ContactCreationSource"
+                "ContactSource"
             ]
         }
 };
