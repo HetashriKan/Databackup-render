@@ -331,8 +331,8 @@ const backupController = async (req, res) => {
 
     return res.status(200).json({
       message: "Backup completed successfully",
-      driveFileIds,
-      summary,
+      // driveFileIds,
+      // summary,
     });
   } catch (error) {
     console.error("Backup error:", error);
