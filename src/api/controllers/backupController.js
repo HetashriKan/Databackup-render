@@ -301,7 +301,7 @@ const backupController = async (req, res) => {
     //Step 6: Insert job metadata in data_jobs
 
     await connection.query(
-      `INSERT INTO data_jobs (org_id, drive_account_id, job_name, description, job_type, start_time, end_time, status, total_objects, total_records, total_bytes)
+      `INSERT INTO data_transfer_job (org_id, drive_account_id, job_name, description, job_type, start_time, end_time, status, total_objects, total_records, total_bytes)
            VALUES (?, ?, ?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)`,
       [
         org.org_id,
