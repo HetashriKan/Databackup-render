@@ -10,6 +10,7 @@ const { parseString } = require("fast-csv");
 const { GoogleAuth } = require("google-auth-library");
 const pool = require("../../../config/configuration");
 const { file } = require("googleapis/build/src/apis/file");
+const skippedFields = require("../../../skipField");
 // const __filename = fileURLToPath(import.meta.url);
 // const __dirname = path.dirname(__filename);
 // import key from "../../../server.key" assert { type: "json" };
@@ -64,7 +65,7 @@ const createFolderInGoogleDrive = async (
       })
       .catch((error) => {
         console.error("Google Drive API files.list error:", error);
-        throw error; 
+        throw error;
       });
 
     console.log("res " + JSON.stringify(res));
@@ -171,7 +172,7 @@ const backupController = async (req, res) => {
       algorithm: "RS256",
     });
 
-    const conn = new Connection({ loginUrl: org.base_url  });
+    const conn = new Connection({ loginUrl: org.base_url });
     await conn.authorize({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion: signedJWT,
@@ -203,13 +204,34 @@ const backupController = async (req, res) => {
 
     let fileSize = 0;
 
-    for (const [objectName, soql] of Object.entries(backupData)) {
+    for (let [objectName, soql] of Object.entries(backupData)) {
       const objectNameFolderId = await createFolderInGoogleDrive(
         objectName,
         backupNameFolderId,
         ACCESS_TOKEN
       );
+      // console.log("soql " + soql);
+      console.log("objectName " + objectName);
+      console.log("skipped fields" + JSON.stringify(skippedFields[objectName]));
 
+      if (skippedFields[objectName] && skippedFields[objectName].field) {
+        const fieldsToSkip = skippedFields[objectName].field;
+        const selectIndex = soql.toUpperCase().indexOf("SELECT") + 6;
+        const fromIndex = soql.toUpperCase().indexOf("FROM");
+        const fieldsPart = soql.substring(selectIndex, fromIndex).trim();
+        const fieldsArray = fieldsPart.split(",").map((f) => f.trim());
+        const filteredFields = fieldsArray.filter(
+          (f) => !fieldsToSkip.includes(f)
+        );
+        const newFieldsPart = filteredFields.join(", ");
+        soql =
+          soql.substring(0, selectIndex) +
+          " " +
+          newFieldsPart +
+          " " +
+          soql.substring(fromIndex);
+        console.log(`Modified SOQL for ${objectName}: ${soql}`);
+      }
       const queryResult = await conn.query(soql);
       // console.log("queryResult " + JSON.stringify(queryResult));
       // console.log("queryResult records" + JSON.stringify(queryResult.records));
@@ -234,7 +256,7 @@ const backupController = async (req, res) => {
 
         createNewFile();
 
-        const MAX_FILE_SIZE = 20 * 1024 * 1024; 
+        const MAX_FILE_SIZE = 20 * 1024 * 1024;
         let fileSizeTracker = 0;
 
         for (const record of queryResult.records) {
@@ -272,7 +294,7 @@ const backupController = async (req, res) => {
 
           currentCsvStream.write(rest);
           fileSizeTracker += rowSize;
-          recordsInCurrentFile++;   
+          recordsInCurrentFile++;
         }
 
         // End the last stream and upload the last file if it has content
