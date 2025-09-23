@@ -3,15 +3,15 @@ const pool = require("../../../config/configuration");
 const getOrgDetails = require("./../../utils/getOrgDetails")
 
 const refreshAccessTokenController = async (req, res) => {
-    const { refreshToken,salesforce_org_id } = req.body;
-    console.log("refreshToken ",refreshToken);
+    const { salesforce_org_id } = req.body;
+    // console.log("refreshToken ",refreshToken);
     console.log("salesforce_org_id ",salesforce_org_id);
     
     try {
         const connection = await pool.getConnection();
         
         const [rows] = await connection.query(
-            "SELECT google_client_id, google_client_secret, salesforce_org_id FROM drive_accounts WHERE salesforce_org_id = ? LIMIT 1",
+            "SELECT google_client_id, google_client_secret, google_refresh_token FROM drive_accounts WHERE salesforce_org_id = ? LIMIT 1",
             [salesforce_org_id]
         );
         
@@ -27,7 +27,7 @@ const refreshAccessTokenController = async (req, res) => {
             params: {
                 client_id: orgDetails.google_client_id,
                 client_secret: orgDetails.google_client_secret,
-                refresh_token: refreshToken,
+                refresh_token: orgDetails.google_refresh_token,
                 grant_type: 'refresh_token',
             },
             headers: {
