@@ -101,18 +101,18 @@ const createFolderInGoogleDrive = async (
 async function uploadToGoogleDriveWithAccessToken(
   filePath,
   fileName,
-  folderName,
+  folderId,
   ACCESS_TOKEN
 ) {
   console.log("innnnn");
   const oAuth2Client = new google.auth.OAuth2();
   oAuth2Client.setCredentials({ access_token: ACCESS_TOKEN });
   const drive = google.drive({ version: "v3", auth: oAuth2Client });
-  const folderId = await createFolderInGoogleDrive(
-    folderName,
-    null,
-    ACCESS_TOKEN
-  );
+  // const folderId = await createFolderInGoogleDrive(
+  //   folderName,
+  //   null,
+  //   ACCESS_TOKEN
+  // );
   console.log("Folder Id:", folderId);
   const fileMetadata = {
     name: fileName,
@@ -189,9 +189,27 @@ const backupController = async (req, res) => {
     }
     const ACCESS_TOKEN = org.google_access_token;
 
+    const rootFolderId = await createFolderInGoogleDrive(
+      `EW_DB_${salesforce_org_id}`,
+      null,
+      ACCESS_TOKEN
+    );
+
+    const backupNameFolderId = await createFolderInGoogleDrive(
+      backupName,
+      rootFolderId,
+      ACCESS_TOKEN
+    );
+
     let fileSize = 0;
 
     for (const [objectName, soql] of Object.entries(backupData)) {
+      const objectNameFolderId = await createFolderInGoogleDrive(
+        objectName,
+        backupNameFolderId,
+        ACCESS_TOKEN
+      );
+
       const queryResult = await conn.query(soql);
       // console.log("queryResult " + JSON.stringify(queryResult));
       // console.log("queryResult records" + JSON.stringify(queryResult.records));
@@ -206,7 +224,7 @@ const backupController = async (req, res) => {
         let recordsInCurrentFile = 0;
 
         const createNewFile = () => {
-          const fileName = `EWDB_${backupName}_${objectName}_${salesforce_org_id}_${Date.now()}_part_${filePart}.csv`;
+          const fileName = `${objectName}_${filePart}.csv`;
           currentFilePath = path.join(tempDir, fileName);
           currentWriteStream = fs.createWriteStream(currentFilePath);
           currentCsvStream = csv.format({ headers: true });
@@ -240,10 +258,10 @@ const backupController = async (req, res) => {
             const driveFileId = await uploadToGoogleDriveWithAccessToken(
               currentFilePath,
               path.basename(currentFilePath),
-              backupName,
+              objectNameFolderId,
               ACCESS_TOKEN
             );
-            driveFileIds[`${objectName}_part_${filePart}`] = driveFileId;
+            driveFileIds[`${objectName}_${filePart}`] = driveFileId;
             fs.unlinkSync(currentFilePath);
 
             // Create new file
@@ -271,10 +289,10 @@ const backupController = async (req, res) => {
           const driveFileId = await uploadToGoogleDriveWithAccessToken(
             currentFilePath,
             path.basename(currentFilePath),
-            backupName,
+            objectNameFolderId,
             ACCESS_TOKEN
           );
-          driveFileIds[`${objectName}_part_${filePart}`] = driveFileId;
+          driveFileIds[`${objectName}_${filePart}`] = driveFileId;
           fs.unlinkSync(currentFilePath);
         }
       }
