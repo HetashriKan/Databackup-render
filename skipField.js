@@ -8,7 +8,12 @@ const skippedFields = {
 
         "Contact": {
             "field": [
-                "ContactSource"
+                "ContactSource",
+
+                // Below fields need to be researched
+                "Pronouns",
+                "GenderIdentity",
+                "BuyerAttributes"
             ]
         }
 };
