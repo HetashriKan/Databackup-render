@@ -14,8 +14,8 @@ const createTables = require("./src/utils/createTables");
 
 app.use(express.json());
 const corsOptions = {
-  // origin: 'https://power-ruby-472.scratch.lightning.force.com',
-  origin: '*',
+  origin: 'https://power-ruby-472.scratch.lightning.force.com',
+  // origin: '*',
   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   preflightContinue: false,
   optionsSuccessStatus: 204
