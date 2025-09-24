@@ -13,8 +13,16 @@ const createTables = require("./src/utils/createTables");
 // const swaggerDocument = require('./swagger.json');
 
 app.use(express.json());
-app.use(cors());
-app.options(/.*/, cors());
+const corsOptions = {
+  // origin: 'https://power-ruby-472.scratch.lightning.force.com',
+  origin: '*',
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+// app.options('*', cors(corsOptions));
 
 app.get("/", (req, res) => {
   res.json({
