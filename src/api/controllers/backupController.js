@@ -232,13 +232,18 @@ const backupController = async (req, res) => {
           soql.substring(fromIndex);
         console.log(`Modified SOQL for ${objectName}: ${soql}`);
       }
-      const queryResult = await conn.query(soql);
-      // console.log("queryResult " + JSON.stringify(queryResult));
-      // console.log("queryResult records" + JSON.stringify(queryResult.records));
+      let queryResult = await conn.query(soql);
+      let allRecords = queryResult.records;
+  
+      while (!queryResult.done) {
+        queryResult = await conn.queryMore(queryResult.nextRecordsUrl);
+        allRecords = allRecords.concat(queryResult.records);
+      }
+      
       summary.totalObjects++;
-      summary.totalRecords += queryResult.totalSize;
+      summary.totalRecords += allRecords.length;
 
-      if (queryResult.records && queryResult.records.length > 0) {
+      if (allRecords && allRecords.length > 0) {
         let filePart = 1;
         let currentFilePath;
         let currentWriteStream;
@@ -259,7 +264,7 @@ const backupController = async (req, res) => {
         const MAX_FILE_SIZE = 20 * 1024 * 1024;
         let fileSizeTracker = 0;
 
-        for (const record of queryResult.records) {
+        for (const record of allRecords) {
           const { attributes, ...rest } = record;
 
           // Convert row to CSV string to measure exact bytes
@@ -315,6 +320,7 @@ const backupController = async (req, res) => {
             ACCESS_TOKEN
           );
           driveFileIds[`${objectName}_${filePart}`] = driveFileId;
+          console.log(`file name: ${objectName}_${filePart}` + 'recordsInCurrentFile' + recordsInCurrentFile);
           fs.unlinkSync(currentFilePath);
         }
       }
@@ -337,6 +343,8 @@ const backupController = async (req, res) => {
         fileSize,
       ]
     );
+
+    console.log("total records " + summary.totalRecords);
 
     // console.log("org id " + org.org_id);
     // console.log("drive account id " + org.drive_id);
