@@ -143,14 +143,14 @@ const backupController = async (req, res) => {
   }
 
   const connection = await pool.getConnection();
+  let dataJobId; 
   try {
-    //  Get Org + Drive details with joins
     const [orgDetails] = await connection.query(
       `SELECT o.org_id, o.client_id, o.salesforce_api_username, o.salesforce_api_jwt_private_key, o.base_url, o.instance_url,
-              d.google_access_token
-       FROM salesforce_orgs o
-       JOIN drive_accounts d ON o.org_id = d.salesforce_org_id
-       WHERE o.org_id = ? LIMIT 1`,
+       d.google_access_token, d.id, m.id AS drive_account_id FROM salesforce_orgs o
+       JOIN org_drive_mappings m ON o.id = m.org_id
+       JOIN drive_accounts d ON d.id = m.drive_account_id
+       WHERE o.org_id = ? `,
       [salesforce_org_id]
     );
 
@@ -178,8 +178,6 @@ const backupController = async (req, res) => {
       assertion: signedJWT,
     });
 
-    // Run SOQL, create CSV for each object, and upload
-    const driveFileIds = {};
     const summary = {
       totalObjects: 0,
       totalRecords: 0,
@@ -202,7 +200,26 @@ const backupController = async (req, res) => {
       ACCESS_TOKEN
     );
 
-    let fileSize = 0;
+    const [result] = await connection.query(
+      `INSERT INTO data_transfer_job (mapping_id, job_name, description, job_type, start_time, status, total_objects, folderId, created_at, updated_at)
+       SELECT m.id, ?, ?, ?, NOW(), ?, ?, ?, NOW(), NOW()
+       FROM salesforce_orgs o
+       JOIN org_drive_mappings m ON o.id = m.org_id
+       JOIN drive_accounts d ON d.id = m.drive_account_id
+       WHERE o.org_id = ?`,
+      [
+        backupName,
+        "Automated backup job",
+        "BACKUP",
+        "IN_PROGRESS",
+        Object.keys(backupData).length,
+        backupNameFolderId,
+        org.org_id,
+      ]
+    );
+    dataJobId = result.insertId;
+
+    let totalBytes = 0;
 
     for (let [objectName, soql] of Object.entries(backupData)) {
       const objectNameFolderId = await createFolderInGoogleDrive(
@@ -210,10 +227,7 @@ const backupController = async (req, res) => {
         backupNameFolderId,
         ACCESS_TOKEN
       );
-      // console.log("soql " + soql);
-      console.log("objectName " + objectName);
-      console.log("skipped fields" + JSON.stringify(skippedFields[objectName]));
-
+      
       if (skippedFields[objectName] && skippedFields[objectName].field) {
         const fieldsToSkip = skippedFields[objectName].field;
         const selectIndex = soql.toUpperCase().indexOf("SELECT") + 6;
@@ -230,7 +244,6 @@ const backupController = async (req, res) => {
           newFieldsPart +
           " " +
           soql.substring(fromIndex);
-        console.log(`Modified SOQL for ${objectName}: ${soql}`);
       }
       let queryResult = await conn.query(soql);
       let allRecords = queryResult.records;
@@ -243,129 +256,70 @@ const backupController = async (req, res) => {
       summary.totalObjects++;
       summary.totalRecords += allRecords.length;
 
+      let objectFileSize = 0;
+
       if (allRecords && allRecords.length > 0) {
-        let filePart = 1;
-        let currentFilePath;
-        let currentWriteStream;
-        let currentCsvStream;
-        let recordsInCurrentFile = 0;
+        const fileName = `${objectName}.csv`;
+        const filePath = path.join(tempDir, fileName);
+        const writeStream = fs.createWriteStream(filePath);
+        const csvStream = csv.format({ headers: true });
 
-        const createNewFile = () => {
-          const fileName = `${objectName}_${filePart}.csv`;
-          currentFilePath = path.join(tempDir, fileName);
-          currentWriteStream = fs.createWriteStream(currentFilePath);
-          currentCsvStream = csv.format({ headers: true });
-          currentCsvStream.pipe(currentWriteStream);
-          recordsInCurrentFile = 0;
-        };
-
-        createNewFile();
-
-        const MAX_FILE_SIZE = 20 * 1024 * 1024;
-        let fileSizeTracker = 0;
+        csvStream.pipe(writeStream);
 
         for (const record of allRecords) {
           const { attributes, ...rest } = record;
-
-          // Convert row to CSV string to measure exact bytes
-          const rowString = Object.values(rest).join(",") + "\n";
-          const rowSize = Buffer.byteLength(rowString);
-
-          // Check if adding this row would exceed the limit - if yes then close the file and upload
-          if (fileSizeTracker + rowSize > MAX_FILE_SIZE) {
-            await new Promise((resolve, reject) => {
-              currentCsvStream.end();
-              currentWriteStream.on("finish", resolve);
-              currentWriteStream.on("error", reject);
-            });
-
-            const currentFileSize = fs.statSync(currentFilePath).size;
-            fileSize += currentFileSize;
-
-            const driveFileId = await uploadToGoogleDriveWithAccessToken(
-              currentFilePath,
-              path.basename(currentFilePath),
-              objectNameFolderId,
-              ACCESS_TOKEN
-            );
-            driveFileIds[`${objectName}_${filePart}`] = driveFileId;
-            fs.unlinkSync(currentFilePath);
-
-            // Create new file
-            filePart++;
-            createNewFile();
-            fileSizeTracker = 0;
-          }
-
-          currentCsvStream.write(rest);
-          fileSizeTracker += rowSize;
-          recordsInCurrentFile++;
+          csvStream.write(rest);
         }
 
-        // End the last stream and upload the last file if it has content
         await new Promise((resolve, reject) => {
-          currentCsvStream.end();
-          currentWriteStream.on("finish", resolve);
-          currentWriteStream.on("error", reject);
+          csvStream.end();
+          writeStream.on("finish", resolve);
+          writeStream.on("error", reject);
         });
 
-        if (recordsInCurrentFile > 0) {
-          const currentFileSize = fs.statSync(currentFilePath).size;
-          fileSize += currentFileSize;
+        objectFileSize = fs.statSync(filePath).size;
 
-          const driveFileId = await uploadToGoogleDriveWithAccessToken(
-            currentFilePath,
-            path.basename(currentFilePath),
-            objectNameFolderId,
-            ACCESS_TOKEN
-          );
-          driveFileIds[`${objectName}_${filePart}`] = driveFileId;
-          console.log(`file name: ${objectName}_${filePart}` + 'recordsInCurrentFile' + recordsInCurrentFile);
-          fs.unlinkSync(currentFilePath);
-        }
+        await uploadToGoogleDriveWithAccessToken(
+          filePath,
+          fileName,
+          objectNameFolderId,
+          ACCESS_TOKEN
+        );
+        fs.unlinkSync(filePath);
       }
+
+      const fields = soql.match(/SELECT (.*) FROM/i)[1].split(',').map(f => f.trim());
+      await connection.query(
+        `INSERT INTO data_transfer_object_log (data_transfer_job_id, object_name, fields_count, estimated_size, status, folderId, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          dataJobId,
+          objectName,
+          fields.length,
+          objectFileSize,
+          "Completed",
+          objectNameFolderId,
+        ]
+      );
+      totalBytes += objectFileSize;
     }
 
-    //Step 6: Insert job metadata in data_jobs
-
     await connection.query(
-      `INSERT INTO data_transfer_job (org_id, drive_account_id, job_name, description, job_type, start_time, end_time, status, total_objects, total_records, total_bytes)
-           VALUES (?, ?, ?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)`,
-      [
-        org.org_id,
-        org.drive_account_id,
-        backupName,
-        "Automated backup job",
-        "BACKUP",
-        "SUCCESS",
-        Object.keys(backupData).length,
-        summary.totalRecords,
-        fileSize,
-      ]
+      `UPDATE data_transfer_job SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ?, updated_at = NOW()WHERE id = ?`,
+      [summary.totalRecords, totalBytes, dataJobId]
     );
-
-    console.log("total records " + summary.totalRecords);
-
-    // console.log("org id " + org.org_id);
-    // console.log("drive account id " + org.drive_id);
-    // console.log("target folder id " + org.target_folder_id);
-    // await connection.query(
-    //   `INSERT INTO org_drive_mappings (org_id, drive_account_id, target_folder_id)
-    //        VALUES (?, ?, ?)`,
-    //   [
-    //     org.org_id,
-    //     org.drive_account_id,
-    //     org.target_folder_id,
-    //   ]
-    // );
 
     return res.status(200).json({
       message: "Backup completed successfully",
-      // driveFileIds,
-      // summary,
     });
   } catch (error) {
     console.error("Backup error:", error);
+    if (dataJobId) {
+        await connection.query(
+            `UPDATE data_transfer_job SET end_time = NOW(), status = 'FAILED', updated_at = NOW() WHERE id = ?`,
+            [dataJobId]
+        );
+    }
     return res
       .status(500)
       .json({ error: "Backup failed", details: error.message });

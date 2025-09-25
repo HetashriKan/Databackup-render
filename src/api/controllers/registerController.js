@@ -28,10 +28,15 @@ const generateCertificate = async (req, res) => {
 
       // store privateKey in DB
       const connection = await pool.getConnection();
-      await connection.query(
+      const [result] = await connection.query(
         'INSERT INTO salesforce_orgs (name, email, companyName, city, state, instance_url, client_id, salesforce_api_jwt_private_key, salesforce_api_username, base_url, created_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)',
         [name, email, companyName, city, state, instanceUrl, clientId, privateKey, username, baseUrl, org_id]
       );
+      console.log('insert id : '+result.insertId)
+      await connection.query(
+           'INSERT INTO org_drive_mappings (org_id, created_at) VALUES (?, NOW())',
+           [result.insertId]
+         );
       connection.release();
 
       res.set('Content-Disposition', 'attachment; filename="server.crt"');
@@ -39,8 +44,14 @@ const generateCertificate = async (req, res) => {
       res.status(200).send(certificate);
 
     } catch (dbError) {
-      console.error(`Database error: ${dbError.message}`);
-      return res.status(500).json({ message: 'Failed to save registration data.' });
+      if((dbError.message).includes('Duplicate entry')){
+            console.error(`Database error: ${dbError.message}`);
+            return res.status(409).json({ message: 'Org is already registered' });
+
+        }else{
+            console.error(`Database error: ${dbError.message}`);
+            return res.status(500).json({ message: 'Failed to save registration data.' });
+        }
     }
   });
 };

@@ -9,12 +9,13 @@ const refreshAccessTokenController = async (req, res) => {
     
     try {
         const connection = await pool.getConnection();
-        
+        console.log("before query");
         const [rows] = await connection.query(
-            "SELECT google_client_id, google_client_secret, google_refresh_token FROM drive_accounts WHERE salesforce_org_id = ? LIMIT 1",
+            "SELECT d.google_client_id, d.google_client_secret, d.google_refresh_token FROM drive_accounts d JOIN org_drive_mappings m ON d.id = m.drive_account_id JOIN salesforce_orgs o ON o.id = m.org_id WHERE o.org_id = ? LIMIT 1",
             [salesforce_org_id]
         );
-        
+        console.log("after query");
+        console.log("rows ",rows);
         const orgDetails = rows[0]; 
         console.log('orgDetails ', orgDetails);
         if (!orgDetails) {
@@ -44,7 +45,7 @@ const refreshAccessTokenController = async (req, res) => {
         
         try {
             await connection.query(
-                "UPDATE drive_accounts SET google_access_token = ? WHERE salesforce_org_id = ?",
+                "UPDATE drive_accounts d JOIN org_drive_mappings m ON d.id = m.drive_account_id JOIN salesforce_orgs o ON o.id = m.org_id SET d.google_access_token = ? WHERE o.org_id = ?",
                 [access_token, salesforce_org_id]
             );
             res.status(200).send({ message: 'Access token refreshed successfully', access_token, expires_in });
