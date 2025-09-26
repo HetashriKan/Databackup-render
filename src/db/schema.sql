@@ -23,7 +23,7 @@ CREATE TABLE salesforce_orgs (
 
 CREATE TABLE drive_accounts (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  FOREIGN KEY (org_id) REFERENCES salesforce_orgs(org_id),
+  -- FOREIGN KEY (org_id) REFERENCES salesforce_orgs(org_id),
   -- salesforce_org_id VARCHAR(255),
   account_email VARCHAR(255),
   default_root_folder VARCHAR(255),
@@ -50,8 +50,7 @@ CREATE TABLE org_drive_mappings (
 CREATE TABLE data_jobs (
   -- id CHAR(36) PRIMARY KEY,
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  org_id VARCHAR(255),
-  drive_account_id BIGINT,
+  mappingId BIGINT,
   job_name VARCHAR(255),
   description TEXT,
   job_type ENUM('RESTORE', 'BACKUP'),
@@ -61,9 +60,26 @@ CREATE TABLE data_jobs (
   total_objects INT,
   total_records BIGINT,
   total_bytes BIGINT,
-  FOREIGN KEY (org_id) REFERENCES salesforce_orgs(org_id),
-  FOREIGN KEY (drive_account_id) REFERENCES drive_accounts(id)
+  folderId VARCHAR(255),
+  FOREIGN KEY (mappingId) REFERENCES org_drive_mappings(id),
+  created_at DATETIME,
+  updated_at DATETIME
 );
+
+CREATE TABLE data_transfer_object_log
+(
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  data_transfer_job_id bigint,
+  FOREIGN KEY (data_transfer_job_id) REFERENCES data_jobs(id),
+  object_name VARCHAR(255),
+  fields_count INT,
+  estimated_size BIGINT,
+  status TEXT,
+  folderId VARCHAR(255),
+  created_at DATETIME,
+  updated_at DATETIME
+);
+
 
 CREATE TABLE error_logs (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,

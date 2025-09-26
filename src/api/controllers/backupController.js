@@ -11,6 +11,7 @@ const { GoogleAuth } = require("google-auth-library");
 const pool = require("../../../config/configuration");
 const { file } = require("googleapis/build/src/apis/file");
 const skippedFields = require("../../../skipField");
+const { Transform } = require("stream");
 // const __filename = fileURLToPath(import.meta.url);
 // const __dirname = path.dirname(__filename);
 // import key from "../../../server.key" assert { type: "json" };
@@ -57,7 +58,7 @@ const createFolderInGoogleDrive = async (
       query += ` and '${parentFolderId}' in parents`;
     }
 
-    console.log("querrrry " + query);
+    // console.log("querrrry " + query);
     const res = await drive.files
       .list({
         q: query,
@@ -68,7 +69,7 @@ const createFolderInGoogleDrive = async (
         throw error;
       });
 
-    console.log("res " + JSON.stringify(res));
+    // console.log("res " + JSON.stringify(res));
     const folders = res.data.files;
 
     if (folders.length > 0) {
@@ -143,8 +144,9 @@ const backupController = async (req, res) => {
   }
 
   const connection = await pool.getConnection();
-  let dataJobId; 
+  let dataJobId;
   try {
+    console.time("🔑 Fetch Org Details");
     const [orgDetails] = await connection.query(
       `SELECT o.org_id, o.client_id, o.salesforce_api_username, o.salesforce_api_jwt_private_key, o.base_url, o.instance_url,
        d.google_access_token, d.id, m.id AS drive_account_id FROM salesforce_orgs o
@@ -153,15 +155,17 @@ const backupController = async (req, res) => {
        WHERE o.org_id = ? `,
       [salesforce_org_id]
     );
+    console.timeEnd("🔑 Fetch Org Details");
 
     if (!orgDetails || orgDetails.length === 0) {
       return res.status(404).json({ error: "Org mapping not found" });
     }
 
     const org = orgDetails[0];
-    console.log("org details " + JSON.stringify(org));
+    // console.log("org details " + JSON.stringify(org));
 
     // Salesforce JWT Auth
+    console.time("🔐 Salesforce Auth");
     const claim = {
       iss: org.client_id,
       sub: org.salesforce_api_username,
@@ -172,34 +176,34 @@ const backupController = async (req, res) => {
       algorithm: "RS256",
     });
 
-    const conn = new Connection({ loginUrl: org.base_url });
+    const conn = new Connection({ loginUrl: org.base_url, maxFetch: 500 });
     await conn.authorize({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
       assertion: signedJWT,
     });
+    console.timeEnd("🔐 Salesforce Auth");
 
-    const summary = {
-      totalObjects: 0,
-      totalRecords: 0,
-    };
+    const summary = { totalObjects: 0, totalRecords: 0 };
     const tempDir = path.join(__dirname, "../../../temp");
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
     const ACCESS_TOKEN = org.google_access_token;
 
+    console.time("📂 Create Root & Backup Folders");
     const rootFolderId = await createFolderInGoogleDrive(
       `EW_DB_${salesforce_org_id}`,
       null,
       ACCESS_TOKEN
     );
-
     const backupNameFolderId = await createFolderInGoogleDrive(
       backupName,
       rootFolderId,
       ACCESS_TOKEN
     );
+    console.timeEnd("📂 Create Root & Backup Folders");
 
+    console.time("📝 Insert Job Record");
     const [result] = await connection.query(
       `INSERT INTO data_transfer_job (mapping_id, job_name, description, job_type, start_time, status, total_objects, folderId, created_at, updated_at)
        SELECT m.id, ?, ?, ?, NOW(), ?, ?, ?, NOW(), NOW()
@@ -217,17 +221,25 @@ const backupController = async (req, res) => {
         org.org_id,
       ]
     );
-    dataJobId = result.insertId;
+    console.timeEnd("📝 Insert Job Record");
 
+    dataJobId = result.insertId;
     let totalBytes = 0;
 
+    // Loop through each object
     for (let [objectName, soql] of Object.entries(backupData)) {
+      console.log(`\n=== 🚀 Processing ${objectName} ===`);
+      const stepStart = Date.now();
+
+      console.time(`📂 Create Folder for ${objectName}`);
       const objectNameFolderId = await createFolderInGoogleDrive(
         objectName,
         backupNameFolderId,
         ACCESS_TOKEN
       );
-      
+      console.timeEnd(`📂 Create Folder for ${objectName}`);
+
+      // Adjust SOQL for skipped fields
       if (skippedFields[objectName] && skippedFields[objectName].field) {
         const fieldsToSkip = skippedFields[objectName].field;
         const selectIndex = soql.toUpperCase().indexOf("SELECT") + 6;
@@ -245,53 +257,67 @@ const backupController = async (req, res) => {
           " " +
           soql.substring(fromIndex);
       }
-      let queryResult = await conn.query(soql);
-      let allRecords = queryResult.records;
-  
-      while (!queryResult.done) {
-        queryResult = await conn.queryMore(queryResult.nextRecordsUrl);
-        allRecords = allRecords.concat(queryResult.records);
-      }
-      
+
+      console.time(`🔎 Query and CSV Generation for ${objectName}`);
+      const fileName = `${objectName}.csv`;
+      const filePath = path.join(tempDir, fileName);
+      const writeStream = fs.createWriteStream(filePath);
+      const csvStream = csv.format({ headers: true });
+
+      let recordCount = 0;
+      const countAndTransform = new Transform({
+        objectMode: true,
+        transform(record, encoding, callback) {
+          recordCount++;
+          const { attributes, ...rest } = record;
+          this.push(rest);
+          callback();
+        },
+      });
+
+      const sfQueryStream = conn.query(soql);
+
+      await new Promise((resolve, reject) => {
+        writeStream.on("finish", resolve);
+        writeStream.on("error", reject);
+        sfQueryStream
+          .on("error", reject)
+          .pipe(countAndTransform)
+          .on("error", reject)
+          .pipe(csvStream)
+          .on("error", reject)
+          .pipe(writeStream);
+      });
+      console.timeEnd(`🔎 Query and CSV Generation for ${objectName}`);
+
       summary.totalObjects++;
-      summary.totalRecords += allRecords.length;
+      summary.totalRecords += recordCount;
 
       let objectFileSize = 0;
 
-      if (allRecords && allRecords.length > 0) {
-        const fileName = `${objectName}.csv`;
-        const filePath = path.join(tempDir, fileName);
-        const writeStream = fs.createWriteStream(filePath);
-        const csvStream = csv.format({ headers: true });
-
-        csvStream.pipe(writeStream);
-
-        for (const record of allRecords) {
-          const { attributes, ...rest } = record;
-          csvStream.write(rest);
-        }
-
-        await new Promise((resolve, reject) => {
-          csvStream.end();
-          writeStream.on("finish", resolve);
-          writeStream.on("error", reject);
-        });
-
+      if (recordCount > 0) {
         objectFileSize = fs.statSync(filePath).size;
 
+        console.time(`☁️ Upload ${objectName} to Drive`);
         await uploadToGoogleDriveWithAccessToken(
           filePath,
           fileName,
           objectNameFolderId,
           ACCESS_TOKEN
         );
+        console.timeEnd(`☁️ Upload ${objectName} to Drive`);
+
         fs.unlinkSync(filePath);
       }
 
-      const fields = soql.match(/SELECT (.*) FROM/i)[1].split(',').map(f => f.trim());
+      console.time(`📝 Insert Log for ${objectName}`);
+      const fields = soql
+        .match(/SELECT (.*) FROM/i)[1]
+        .split(",")
+        .map((f) => f.trim());
       await connection.query(
         `INSERT INTO data_transfer_object_log (data_transfer_job_id, object_name, fields_count, estimated_size, status, folderId, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+         VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
           dataJobId,
           objectName,
@@ -301,24 +327,33 @@ const backupController = async (req, res) => {
           objectNameFolderId,
         ]
       );
+      console.timeEnd(`📝 Insert Log for ${objectName}`);
+
       totalBytes += objectFileSize;
+
+      console.log(
+        `⏱️ Total time for ${objectName}: ${(Date.now() - stepStart) / 1000}s`
+      );
     }
 
+    console.time("✅ Finalize Job");
     await connection.query(
       `UPDATE data_transfer_job SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ?, updated_at = NOW()WHERE id = ?`,
       [summary.totalRecords, totalBytes, dataJobId]
     );
+    console.timeEnd("✅ Finalize Job");
 
     return res.status(200).json({
       message: "Backup completed successfully",
+      summary,
     });
   } catch (error) {
     console.error("Backup error:", error);
     if (dataJobId) {
-        await connection.query(
-            `UPDATE data_transfer_job SET end_time = NOW(), status = 'FAILED', updated_at = NOW() WHERE id = ?`,
-            [dataJobId]
-        );
+      await connection.query(
+        `UPDATE data_transfer_job SET end_time = NOW(), status = 'FAILED', updated_at = NOW() WHERE id = ?`,
+        [dataJobId]
+      );
     }
     return res
       .status(500)

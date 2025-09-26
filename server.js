@@ -8,6 +8,8 @@ require("dotenv").config();
 const endpoints = require("./endpoints");
 const pool = require("./config/configuration");
 const createTables = require("./src/utils/createTables");
+const swaggerUi = require('swagger-ui-express');
+
 
 // const swaggerUi = require('swagger-ui-express');
 // const swaggerDocument = require('./swagger.json');
@@ -39,7 +41,19 @@ app.get("/", (req, res) => {
 app.use(router);
 
 app.use("/api", require("./src/api/routes"));
-// app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+const swaggerJSON = require("./swagger/swaggerPath");
+
+var options = {
+  explorer: true,
+};
+
+
+app.use("/api-docs/", swaggerUi.serve);
+app.get(
+  "/api-docs/",
+  swaggerUi.setup(swaggerJSON, options)
+);
+
 
 // app.use(function (err, req, res, next) {
 //   if (err instanceof ValidationError) {
