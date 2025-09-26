@@ -15,8 +15,9 @@ const generateCertificate = async (req, res) => {
   const certPath = path.join(__dirname, 'server.crt');
 
   const opensslCmd = `openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" -days 365 -nodes -subj "${subj}"`;
+  const opensslConf = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
-  exec(opensslCmd, { env: { ...process.env, OPENSSL_CONF: 'NUL' } }, async (error) => {
+  exec(opensslCmd, { env: { ...process.env, OPENSSL_CONF: opensslConf } }, async (error) => {
     if (error) {
       console.error(`Error generating certificate: ${error.message}`);
       return res.status(500).json({ message: 'Failed to generate certificate.' });
