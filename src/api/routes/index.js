@@ -97,8 +97,10 @@ router.get("/auth/google", async (req, res) => {
       });
       const connection = await pool.getConnection();
       const [orgDetails] = await connection.query(
-        "SELECT salesforce_org_id FROM drive_accounts WHERE salesforce_org_id = ?",
-        [user.iss]
+        // "SELECT salesforce_org_id FROM drive_accounts WHERE salesforce_org_id = ?",
+        // [user.iss]
+        "SELECT o.org_id FROM salesforce_orgs o JOIN org_drive_mappings m ON o.id = m.org_id JOIN drive_accounts d ON d.id = m.drive_account_id WHERE o.org_id = ?",
+      [salesforce_org_id]
       );
 
       // if (orgDetails.length > 0) {
