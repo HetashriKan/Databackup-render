@@ -205,7 +205,7 @@ const backupController = async (req, res) => {
 
     console.time("📝 Insert Job Record");
     const [result] = await connection.query(
-      `INSERT INTO data_transfer_job (mapping_id, job_name, description, job_type, start_time, status, total_objects, folderId, created_at, updated_at)
+      `INSERT INTO data_transfer_jobs (mapping_id, job_name, description, job_type, start_time, status, total_objects, folderId, created_at, updated_at)
        SELECT m.id, ?, ?, ?, NOW(), ?, ?, ?, NOW(), NOW()
        FROM salesforce_orgs o
        JOIN org_drive_mappings m ON o.id = m.org_id
@@ -338,7 +338,7 @@ const backupController = async (req, res) => {
 
     console.time("✅ Finalize Job");
     await connection.query(
-      `UPDATE data_transfer_job SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ?, updated_at = NOW()WHERE id = ?`,
+      `UPDATE s SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ?, updated_at = NOW()WHERE id = ?`,
       [summary.totalRecords, totalBytes, dataJobId]
     );
     console.timeEnd("✅ Finalize Job");
@@ -351,7 +351,7 @@ const backupController = async (req, res) => {
     console.error("Backup error:", error);
     if (dataJobId) {
       await connection.query(
-        `UPDATE data_transfer_job SET end_time = NOW(), status = 'FAILED', updated_at = NOW() WHERE id = ?`,
+        `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'FAILED', updated_at = NOW() WHERE id = ?`,
         [dataJobId]
       );
     }
