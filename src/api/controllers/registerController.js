@@ -26,6 +26,7 @@ const generateCertificate = async (req, res) => {
     try {
       const privateKey = fs.readFileSync(keyPath, 'utf8');
       const certificate = fs.readFileSync(certPath, 'utf8');
+      console.log('certificate ' + certificate);
 
       // store privateKey in DB
       const connection = await pool.getConnection();
