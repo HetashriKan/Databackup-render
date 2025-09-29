@@ -226,6 +226,8 @@ const backupController = async (req, res) => {
     dataJobId = result.insertId;
     let totalBytes = 0;
 
+    const MAX_FILE_SIZE = 250 * 1024 * 1024;
+
     // Loop through each object
     for (let [objectName, soql] of Object.entries(backupData)) {
       console.log(`\n=== 🚀 Processing ${objectName} ===`);
@@ -258,57 +260,164 @@ const backupController = async (req, res) => {
           soql.substring(fromIndex);
       }
 
-      console.time(`🔎 Query and CSV Generation for ${objectName}`);
-      const fileName = `${objectName}.csv`;
-      const filePath = path.join(tempDir, fileName);
-      const writeStream = fs.createWriteStream(filePath);
-      const csvStream = csv.format({ headers: true });
+      // console.time(`🔎 Query and CSV Generation for ${objectName}`);
+      // const fileName = `${objectName}.csv`;
+      // const filePath = path.join(tempDir, fileName);
+      // const writeStream = fs.createWriteStream(filePath);
+      // var stats = fs.statSync(filePath);
+      // var fileSizeInBytes = stats.size;
+      // console.log('file sieze ' + fileSizeInBytes)
+      // const csvStream = csv.format({ headers: true });
 
-      let recordCount = 0;
-      const countAndTransform = new Transform({
-        objectMode: true,
-        transform(record, encoding, callback) {
-          recordCount++;
-          const { attributes, ...rest } = record;
-          this.push(rest);
-          callback();
-        },
-      });
+      // let recordCount = 0;
+      // const countAndTransform = new Transform({
+      //   objectMode: true,
+      //   transform(record, encoding, callback) {
+      //     recordCount++;
+      //     const { attributes, ...rest } = record;
+      //     this.push(rest);
+      //     callback();
+      //   },
+      // });
 
-      const sfQueryStream = conn.query(soql);
+      // const sfQueryStream = conn.query(soql);
 
-      await new Promise((resolve, reject) => {
-        writeStream.on("finish", resolve);
-        writeStream.on("error", reject);
-        sfQueryStream
-          .on("error", reject)
-          .pipe(countAndTransform)
-          .on("error", reject)
-          .pipe(csvStream)
-          .on("error", reject)
-          .pipe(writeStream);
-      });
-      console.timeEnd(`🔎 Query and CSV Generation for ${objectName}`);
+      // await new Promise((resolve, reject) => {
+      //   writeStream.on("finish", resolve);
+      //   writeStream.on("error", reject);
+      //   sfQueryStream
+      //     .on("error", reject)
+      //     .pipe(countAndTransform)
+      //     .on("error", reject)
+      //     .pipe(csvStream)
+      //     .on("error", reject)
+      //     .pipe(writeStream);
+      // });
+      // console.timeEnd(`🔎 Query and CSV Generation for ${objectName}`);
 
-      summary.totalObjects++;
-      summary.totalRecords += recordCount;
+      // summary.totalObjects++;
+      // summary.totalRecords += recordCount;
 
-      let objectFileSize = 0;
+      // let objectFileSize = 0;
 
-      if (recordCount > 0) {
-        objectFileSize = fs.statSync(filePath).size;
+      // if (recordCount > 0) {
+      //   objectFileSize = fs.statSync(filePath).size;
 
-        console.time(`☁️ Upload ${objectName} to Drive`);
-        await uploadToGoogleDriveWithAccessToken(
-          filePath,
-          fileName,
-          objectNameFolderId,
-          ACCESS_TOKEN
-        );
-        console.timeEnd(`☁️ Upload ${objectName} to Drive`);
+      //   console.time(`☁️ Upload ${objectName} to Drive`);
+      //   await uploadToGoogleDriveWithAccessToken(
+      //     filePath,
+      //     fileName,
+      //     objectNameFolderId,
+      //     ACCESS_TOKEN
+      //   );
+      //   console.timeEnd(`☁️ Upload ${objectName} to Drive`);
 
-        fs.unlinkSync(filePath);
-      }
+      //   fs.unlinkSync(filePath);
+      // }
+
+      let allRecords = [];
+      let queryResult = await conn.query(soql);
+      allRecords = allRecords.concat(queryResult.records);
+
+      while (!queryResult.done) {
+        queryResult = await conn.queryMore(queryResult.nextRecordsUrl);
+        allRecords = allRecords.concat(queryResult.records);
+      }
+
+      summary.totalObjects++;
+      summary.totalRecords += allRecords.length;
+
+      let objectFileSize = 0;
+      let recordsInObject = allRecords.length;
+
+      if (recordsInObject > 0) {
+        console.time(`🔎 CSV Generation and Upload for ${objectName}`);
+        let filePart = 1;
+        let currentFilePath;
+        let currentWriteStream;
+        let currentCsvStream;
+        let recordsInCurrentFile = 0;
+        let fileSizeTracker = 0;
+        let fileOpenPromise = Promise.resolve();
+
+        const createNewFile = () => {
+          const fileName = `${objectName}_${filePart}.csv`;
+          currentFilePath = path.join(tempDir, fileName);
+          currentWriteStream = fs.createWriteStream(currentFilePath);
+          // Using the original `csv.format` since the streaming logic was replaced with `conn.query` and manual pagination.
+          currentCsvStream = csv.format({ headers: true });
+          currentCsvStream.pipe(currentWriteStream);
+          recordsInCurrentFile = 0;
+          fileSizeTracker = 0; // Reset size tracker for the new file
+        };
+        
+        const closeAndUploadFile = async () => {
+          if (recordsInCurrentFile > 0) {
+            await new Promise((resolve, reject) => {
+              currentCsvStream.end();
+              currentWriteStream.on("finish", resolve);
+              currentWriteStream.on("error", reject);
+            });
+
+            const currentFileSize = fs.statSync(currentFilePath).size;
+            objectFileSize += currentFileSize;
+            totalBytes += currentFileSize; // Add to overall total
+
+            console.log(`☁️ Uploading ${path.basename(currentFilePath)} (${(currentFileSize / (1024 * 1024)).toFixed(2)} MB)`);
+            await uploadToGoogleDriveWithAccessToken(
+              currentFilePath,
+              path.basename(currentFilePath),
+              objectNameFolderId,
+              ACCESS_TOKEN
+            );
+            fs.unlinkSync(currentFilePath);
+          }
+        };
+
+        createNewFile();
+
+        for (const record of allRecords) {
+          const { attributes, ...rest } = record;
+          
+          // Estimate row size for file splitting logic
+          const headerlessRow = Object.values(rest).join(",");
+          const rowString = recordsInCurrentFile === 0 ? Object.keys(rest).join(",") + "\n" + headerlessRow + "\n" : headerlessRow + "\n";
+          const rowSize = Buffer.byteLength(rowString, 'utf8');
+
+          if (fileSizeTracker + rowSize > MAX_FILE_SIZE) {
+            // Close and upload the current file
+            await closeAndUploadFile();
+
+            // Start a new file
+            filePart++;
+            createNewFile();
+            
+            // Recalculate size for the new file to include headers
+            const newFileHeaderRow = Object.keys(rest).join(",") + "\n";
+            const newFileHeaderSize = Buffer.byteLength(newFileHeaderRow, 'utf8');
+            fileSizeTracker += newFileHeaderSize;
+          }
+
+          currentCsvStream.write(rest);
+          
+          // Adjust size tracker: fast-csv handles the headers on the first write
+          if (recordsInCurrentFile === 0) {
+            // On first record, account for both data and header size
+            const headerRow = Object.keys(rest).join(",") + "\n";
+            fileSizeTracker += Buffer.byteLength(headerRow, 'utf8');
+            fileSizeTracker += Buffer.byteLength(headerlessRow + "\n", 'utf8');
+          } else {
+            fileSizeTracker += Buffer.byteLength(headerlessRow + "\n", 'utf8');
+          }
+
+          recordsInCurrentFile++;
+        }
+
+        // Final close and upload for the last file part
+        await closeAndUploadFile();
+        console.timeEnd(`🔎 CSV Generation and Upload for ${objectName}`);
+      }
+
 
       console.time(`📝 Insert Log for ${objectName}`);
       const fields = soql
