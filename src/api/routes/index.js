@@ -109,8 +109,13 @@ router.get("/auth/google", async (req, res) => {
         //   .send({ message: "Drive Account Already Exists" });
       // } else {
         const results = await connection.query(
-          `INSERT INTO drive_accounts (salesforce_org_id, google_client_id, google_client_secret) VALUES (?, ?,?)`,
-          [user.iss, user.clientId, user.clientSecret]
+          `
+          INSERT INTO drive_accounts (google_client_id, google_client_secret)
+          SELECT ?, ?
+          FROM salesforce_orgs o
+          WHERE o.org_id = ?
+          `,
+          [user.clientId, user.clientSecret, user.iss]
         );
         console.log("stored successfully");
         if (results.length === 0) {
