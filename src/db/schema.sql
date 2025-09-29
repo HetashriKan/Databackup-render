@@ -39,15 +39,15 @@ CREATE TABLE drive_accounts (
 CREATE TABLE org_drive_mappings (
   -- id CHAR(36) PRIMARY KEY,
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  org_id VARCHAR(255),
+  org_id BIGINT,
   drive_account_id BIGINT,
   target_folder_id VARCHAR(255),
   created_at DATETIME,
-  FOREIGN KEY (org_id) REFERENCES salesforce_orgs(org_id),
+  FOREIGN KEY (org_id) REFERENCES salesforce_orgs(id),
   FOREIGN KEY (drive_account_id) REFERENCES drive_accounts(id)
 );
 
-CREATE TABLE data_jobs (
+CREATE TABLE data_transfer_jobs (
   -- id CHAR(36) PRIMARY KEY,
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   mappingId BIGINT,
@@ -70,7 +70,7 @@ CREATE TABLE data_transfer_object_log
 (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   data_transfer_job_id bigint,
-  FOREIGN KEY (data_transfer_job_id) REFERENCES data_jobs(id),
+  FOREIGN KEY (data_transfer_job_id) REFERENCES data_transfer_jobs(id),
   object_name VARCHAR(255),
   fields_count INT,
   estimated_size BIGINT,
