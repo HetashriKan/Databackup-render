@@ -105,7 +105,7 @@ router.get("/auth/google", async (req, res) => {
       });
       console.log('9');
       // const connection = await pool.getConnection();
-      await pool.query("USE databackup");
+      // await pool.query("USE databackup");
       console.log('10');
       const org_mapping_id = await pool
       .query(
