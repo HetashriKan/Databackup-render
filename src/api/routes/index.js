@@ -87,7 +87,7 @@ router.get("/auth/google", async (req, res) => {
         user.clientId,
         user.clientSecret,
         // 'https://databackup-server.onrender.com/api/auth/google/callback'
-        // 'http://localhost:3000/api/auth/google/callback'
+        // "http://localhost:3000/api/auth/google/callback"
         "https://databackup-render.onrender.com/api/auth/google/callback"
       );
       const url = oauth2Client.generateAuthUrl({
@@ -95,31 +95,61 @@ router.get("/auth/google", async (req, res) => {
         prompt: "consent", // force consent each time (for dev)
         scope: ["profile", "email", "https://www.googleapis.com/auth/drive"],
       });
-      const connection = await pool.getConnection();
-      const [orgDetails] = await connection.query(
-        // "SELECT salesforce_org_id FROM drive_accounts WHERE salesforce_org_id = ?",
-        // [user.iss]
-        "SELECT o.org_id FROM salesforce_orgs o JOIN org_drive_mappings m ON o.id = m.org_id JOIN drive_accounts d ON d.id = m.drive_account_id WHERE o.org_id = ?",
-        [org_id]
-      );
+      // const connection = await pool.getConnection();
+      await pool.query("USE databackup");
+      const org_mapping_id = await pool
+        .query(
+          "select m.id as mappingId,m.org_id as orgId, o.org_id as salesforceOrgId,o.id as orgNo from org_drive_mappings m JOIN salesforce_orgs o ON o.id = m.org_id where o.org_id = ?",
+          [user.iss]
+        )
+        .then((resulttt) => {
+          console.log("org mapping resulttt : ", resulttt);
+          return resulttt;
+        })
+        .catch((err) => {
+          console.error("Error fetching org mapping:", err);
+        });
 
+      console.log("org mapping : ", org_mapping_id[0][0].mappingId);
+      const [results] = await pool
+        .query(
+          `INSERT INTO drive_accounts (google_client_id, google_client_secret) VALUES (?, ?)`,
+          [user.clientId, user.clientSecret]
+        )
+        .then((results) => {
+          console.log("results", results);
+          return results;
+        })
+        .catch((err) => {
+          console.error("Error fetching org mapping:", err);
+        });
+      console.log("resultssss", results.insertId);
+      const [mappingResult] = await pool
+        .query("UPDATE org_drive_mappings SET drive_account_id = ?", [
+          results.insertId,
+        ])
+        .then((mappingResult) => {
+          console.log("mappingResult", mappingResult);
+          return mappingResult;
+        })
+        .catch((err) => {
+          console.error("Error fetching org mapping:", err);
+        });
+      // console.log("mappingResult", mappingResult);
       // if (orgDetails.length > 0) {
       // return res
       //   .status(400)
       //   .send({ message: "Drive Account Already Exists" });
       // } else {
-      const results = await connection.query(
-        `
-          INSERT INTO drive_accounts (google_client_id, google_client_secret)
-          SELECT ?, ?
-          FROM salesforce_orgs o
-          WHERE o.org_id = ?
-          `,
-        [user.clientId, user.clientSecret, user.iss]
-      );
+      // const results = await connection.query(
+      //   `INSERT INTO drive_accounts (salesforce_org_id, google_client_id, google_client_secret) VALUES (?, ?,?)`,
+      //   [user.iss, user.clientId, user.clientSecret]
+      // );
       console.log("stored successfully");
       if (results.length === 0) {
         throw new Error("Error Creating Drive Account");
+      } else if (mappingResult.affectedRows === 0) {
+        throw new Error("Error Creating Drive Account Mapping");
       } else {
         res.redirect(url);
         return;
@@ -127,7 +157,9 @@ router.get("/auth/google", async (req, res) => {
       // }
     }
   } catch (err) {
-    console.log(err);
+    if (err.message.includes("Duplicate entry")) {
+      res.status(409).send("Google Drive account is already linked to the org");
+    }
   } finally {
     connection.release();
   }
@@ -151,29 +183,65 @@ router.get("/auth/google/callback", async (req, res) => {
     console.log("userrr", user);
     console.log("userrr orgid", user.iss);
     // console.log("Tokens:", tokens);
+    const org_mapping = await pool
+      .query(
+        `select m.id as mappingId,m.org_id as orgId, o.org_id as salesforceOrgId,o.id as orgNo from org_drive_mappings m JOIN salesforce_orgs o ON o.id = m.org_id where o.org_id = ? `,
+        [user.iss]
+      )
+      .then((resulttt) => {
+        console.log("org mapping resulttt : ", resulttt);
+        return resulttt;
+      })
+      .catch((err) => {
+        console.error("Error fetching org mapping:", err);
+      });
+
+    console.log("org mapping : ", org_mapping);
+    // const access_token = tokens.access_token;
+    // const refresh_token = tokens.refresh_token;
+    // const org_mapping_id = org_mapping[0][0].id;
+
+    console.log("org mapping : ", org_mapping[0][0].mappingId);
+    console.log("access token : ", tokens.access_token);
+    console.log("refresh token : ", tokens.refresh_token);
     const results = await pool
       .query(
-        `
-  UPDATE drive_accounts d
-  JOIN org_drive_mappings m ON m.drive_account_id = d.id
-  JOIN salesforce_orgs o ON o.id = m.org_id
-  SET d.google_access_token = ?, d.google_refresh_token = ?
-  WHERE o.org_id = ?
-  `,
-        [tokens.access_token, tokens.refresh_token, user.iss]
+        `UPDATE drive_accounts d INNER JOIN org_drive_mappings m ON d.id = m.drive_account_id SET d.google_access_token = ?, d.google_refresh_token = ? WHERE m.org_id = ?`,
+        [tokens.access_token, tokens.refresh_token, org_mapping[0][0].orgId]
       )
       .then((results) => {
         console.log("Stored token successfully");
+        console.log("Stored token successfully", results);
         res.sendFile(__dirname + "/public/");
       })
       .catch((err) => {
         console.error("Error storing token:", err);
       });
+
+      console.log("results after update: ", results);
+    console.log("org mapping id : ", org_mapping[0][0].orgId);
+    const [updatedRows] = await pool.query(
+      `SELECT d.id as driveId, d.google_access_token as accessToken, d.google_refresh_token as refreshToken 
+   FROM drive_accounts d 
+   JOIN org_drive_mappings m ON d.id = m.drive_account_id
+   WHERE m.org_id = ?`,
+      [org_mapping[0][0].orgId]
+    );
+
+    console.log("updated rows : ", updatedRows);
+
+    console.log("updated row : ", updatedRows[0].driveId);
+
+    const mappingResult = await pool.query(
+      "UPDATE org_drive_mappings m INNER JOIN drive_accounts d on d.id = m.drive_account_id SET m.drive_account_id = ? where m.org_id = ?",
+      [updatedRows[0].driveId, org_mapping[0][0].mappingId]
+    );
   } catch (err) {
     console.error("Google Auth Error:", err);
     res.status(401).json({ success: false, message: "Auth failed" });
   }
 });
+
 
 /**
  * Protected test route – list Drive files
