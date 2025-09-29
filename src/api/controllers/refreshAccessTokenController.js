@@ -58,7 +58,7 @@ const refreshAccessTokenController = async (req, res) => {
         }
     }
     catch(error) {
-        console.log('error in refresh token ' + e)
+        console.log('error in refresh token ' + error)
         res.status(400).send({ message: 'Failed to refresh access token' });
     }
 }
