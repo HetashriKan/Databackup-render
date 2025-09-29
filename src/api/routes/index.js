@@ -100,30 +100,30 @@ router.get("/auth/google", async (req, res) => {
         // "SELECT salesforce_org_id FROM drive_accounts WHERE salesforce_org_id = ?",
         // [user.iss]
         "SELECT o.org_id FROM salesforce_orgs o JOIN org_drive_mappings m ON o.id = m.org_id JOIN drive_accounts d ON d.id = m.drive_account_id WHERE o.org_id = ?",
-      [org_id]
+        [org_id]
       );
 
       // if (orgDetails.length > 0) {
-        // return res
-        //   .status(400)
-        //   .send({ message: "Drive Account Already Exists" });
+      // return res
+      //   .status(400)
+      //   .send({ message: "Drive Account Already Exists" });
       // } else {
-        const results = await connection.query(
-          `
+      const results = await connection.query(
+        `
           INSERT INTO drive_accounts (google_client_id, google_client_secret)
           SELECT ?, ?
           FROM salesforce_orgs o
           WHERE o.org_id = ?
           `,
-          [user.clientId, user.clientSecret, user.iss]
-        );
-        console.log("stored successfully");
-        if (results.length === 0) {
-          throw new Error("Error Creating Drive Account");
-        } else {
-          res.redirect(url);
-          return;
-        }
+        [user.clientId, user.clientSecret, user.iss]
+      );
+      console.log("stored successfully");
+      if (results.length === 0) {
+        throw new Error("Error Creating Drive Account");
+      } else {
+        res.redirect(url);
+        return;
+      }
       // }
     }
   } catch (err) {
@@ -153,7 +153,13 @@ router.get("/auth/google/callback", async (req, res) => {
     // console.log("Tokens:", tokens);
     const results = await pool
       .query(
-        `UPDATE drive_accounts SET google_access_token = ?, google_refresh_token = ? WHERE salesforce_org_id = ?`,
+        `
+  UPDATE drive_accounts d
+  JOIN org_drive_mappings m ON m.drive_account_id = d.id
+  JOIN salesforce_orgs o ON o.id = m.org_id
+  SET d.google_access_token = ?, d.google_refresh_token = ?
+  WHERE o.org_id = ?
+  `,
         [tokens.access_token, tokens.refresh_token, user.iss]
       )
       .then((results) => {
