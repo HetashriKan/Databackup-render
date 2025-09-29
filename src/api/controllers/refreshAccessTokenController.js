@@ -24,22 +24,30 @@ const refreshAccessTokenController = async (req, res) => {
             return res.status(404).send({ message: 'Salesforce Org not found' });
         }
         console.log("before response");
-        const response = await axios.post('https://oauth2.googleapis.com/token', null, {
-            params: {
-                client_id: orgDetails.google_client_id,
-                client_secret: orgDetails.google_client_secret,
-                refresh_token: orgDetails.google_refresh_token,
-                grant_type: 'refresh_token',
-            },
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
-        })
+        let  response;
 
-        // console.log("Google OAuth response status:", response.status);
-        // console.log("Google OAuth response data:", response.data)
-        
-        console.log("response ",response);
+        try {
+            response = await axios.post('https://oauth2.googleapis.com/token', null, {
+                params: {
+                    client_id: orgDetails.google_client_id,
+                    client_secret: orgDetails.google_client_secret,
+                    refresh_token: orgDetails.google_refresh_token,
+                    grant_type: 'refresh_token',
+                },
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            })
+    
+            // console.log("Google OAuth response status:", response.status);
+            // console.log("Google OAuth response data:", response.data)
+            
+            console.log("response ",response);
+        }
+        catch (error) {
+            console.log('error in refresh token ' + error)
+            res.status(400).send({ message: 'Failed to refresh access token' });
+        }
         
         const { access_token, expires_in } = response.data;
         
