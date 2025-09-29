@@ -337,8 +337,9 @@ const backupController = async (req, res) => {
     }
 
     console.time("✅ Finalize Job");
+    console.log("Summary:", JSON.stringify(summary));
     await connection.query(
-      `UPDATE s SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ?, updated_at = NOW()WHERE id = ?`,
+      `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ?, updated_at = NOW()WHERE id = ?`,
       [summary.totalRecords, totalBytes, dataJobId]
     );
     console.timeEnd("✅ Finalize Job");
