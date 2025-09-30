@@ -199,7 +199,7 @@ const backupController = async (req, res) => {
 
     console.time("📂 Create Root & Backup Folders");
     const rootFolderId = await createFolderInGoogleDrive(
-      `${salesforce_org_id}`,
+      `EW_DB_${salesforce_org_id}`,
       null,
       ACCESS_TOKEN
     );
@@ -413,7 +413,6 @@ const backupController = async (req, res) => {
 
           currentCsvStream.write(rest);
           
-          // Adjust size tracker: fast-csv handles the headers on the first write
           if (recordsInCurrentFile === 0) {
             // On first record, account for both data and header size
             const headerRow = Object.keys(rest).join(",") + "\n";
@@ -445,7 +444,7 @@ const backupController = async (req, res) => {
           objectName,
           fields.length,
           objectFileSize,
-          "Completed",
+          JSON.stringify(fields),
           objectNameFolderId,
         ]
       );
