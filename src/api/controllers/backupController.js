@@ -62,7 +62,7 @@ const createFolderInGoogleDrive = async (
     const res = await drive.files
       .list({
         q: query,
-        fields: "files(id, name)",
+        fields: "files(id, name, capabilities)",
       })
       .catch((error) => {
         console.error("Google Drive API files.list error:", error);
@@ -73,10 +73,16 @@ const createFolderInGoogleDrive = async (
     const folders = res.data.files;
 
     if (folders.length > 0) {
+      const folder = folders[0];
       console.log(
-        `Folder '${folderName}' already exists. ID: ${folders[0].id}`
+        `Folder '${folderName}' already exists. ID: ${folder.id}`
       );
-      return folders[0].id;
+      if (folder.capabilities && folder.capabilities.canAddChildren === false) {
+        throw new Error(
+          `Insufficient permissions for folder '${folderName}'. Cannot add files or folders to it.`
+        );
+      }
+      return folder.id;
     } else {
       const fileMetadata = {
         name: folderName,
@@ -148,7 +154,7 @@ const backupController = async (req, res) => {
   try {
     console.time("🔑 Fetch Org Details");
     const [orgDetails] = await connection.query(
-      `SELECT o.org_id, o.client_id, o.salesforce_api_username, o.salesforce_api_jwt_private_key, o.base_url, o.instance_url,
+      `SELECT o.id, o.org_id, o.client_id, o.salesforce_api_username, o.salesforce_api_jwt_private_key, o.base_url, o.instance_url,
        d.google_access_token, d.id, m.id AS drive_account_id FROM salesforce_orgs o
        JOIN org_drive_mappings m ON o.id = m.org_id
        JOIN drive_accounts d ON d.id = m.drive_account_id
@@ -176,6 +182,7 @@ const backupController = async (req, res) => {
       algorithm: "RS256",
     });
 
+    console.log('signed JWT ' + signedJWT);
     const conn = new Connection({ loginUrl: org.base_url, maxFetch: 500 });
     await conn.authorize({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -192,10 +199,16 @@ const backupController = async (req, res) => {
 
     console.time("📂 Create Root & Backup Folders");
     const rootFolderId = await createFolderInGoogleDrive(
-      `EW_DB_${salesforce_org_id}`,
+      `${salesforce_org_id}`,
       null,
       ACCESS_TOKEN
     );
+
+    await connection.query(
+      `UPDATE drive_accounts d JOIN org_drive_mappings m ON d.id = m.drive_account_id SET d.default_root_folder = ? WHERE m.org_id = ?`,
+      [rootFolderId,  orgDetails.id]
+    );
+
     const backupNameFolderId = await createFolderInGoogleDrive(
       backupName,
       rootFolderId,
@@ -361,7 +374,7 @@ const backupController = async (req, res) => {
 
             const currentFileSize = fs.statSync(currentFilePath).size;
             objectFileSize += currentFileSize;
-            totalBytes += currentFileSize; // Add to overall total
+            totalBytes += currentFileSize; 
 
             console.log(`☁️ Uploading ${path.basename(currentFilePath)} (${(currentFileSize / (1024 * 1024)).toFixed(2)} MB)`);
             await uploadToGoogleDriveWithAccessToken(
@@ -448,7 +461,7 @@ const backupController = async (req, res) => {
     console.time("✅ Finalize Job");
     console.log("Summary:", JSON.stringify(summary));
     await connection.query(
-      `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ?, updated_at = NOW()WHERE id = ?`,
+      `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ? WHERE id = ?`,
       [summary.totalRecords, totalBytes, dataJobId]
     );
     console.timeEnd("✅ Finalize Job");
@@ -461,7 +474,7 @@ const backupController = async (req, res) => {
     console.error("Backup error:", error);
     if (dataJobId) {
       await connection.query(
-        `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'FAILED', updated_at = NOW() WHERE id = ?`,
+        `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'FAILED' WHERE id = ?`,
         [dataJobId]
       );
     }

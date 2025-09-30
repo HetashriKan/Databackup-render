@@ -13,6 +13,7 @@ const Id = randomUUID();
 router.use("/backup", require("./backup"));
 router.use("/register", require("./register"));
 router.use("/refresh-token", require("./refreshAccessToken"));
+router.use("/sync-status", require("./syncStatus"));
 
 // /api/health
 router.route("/health").get(async (req, res) => {
