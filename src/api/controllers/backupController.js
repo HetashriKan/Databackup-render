@@ -106,6 +106,93 @@ const createFolderInGoogleDrive = async (
   }
 };
 
+const syncJobToSalesforce = async (job, orgDetails, connection) => {
+    // Re-use the JWT auth logic from getSalesforceAccessToken, but simplify for direct use
+    const org = orgDetails[0];
+    const { client_id, salesforce_api_username, salesforce_api_jwt_private_key, base_url } = org;
+
+    const jwtPayload = {
+        iss: client_id,
+        sub: salesforce_api_username,
+        aud: base_url,
+        exp: Math.floor(Date.now() / 1000) + 60 * 3,
+    };
+
+    const token = jwt.sign(jwtPayload, salesforce_api_jwt_private_key, {
+        algorithm: "RS256",
+    });
+
+    const tokenUrl = `${base_url}/services/oauth2/token`;
+    const params = new URLSearchParams();
+    params.append("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer");
+    params.append("assertion", token);
+    const accessTokenResponse = await axios.post(tokenUrl, params);
+    const accessToken = accessTokenResponse.data.access_token;
+
+    const configMap = {
+        backupName: job.job_name,
+        backupDescription: job.description,
+        backupId: job.id, // MySQL Job ID -> Salesforce External_ID__c
+        backupStatus: job.status,
+        backupTotalObjects: job.total_objects,
+        backupTotalRecords: job.total_records,
+        backupTotalBytes: job.total_bytes,
+        backupStartTime: job.start_time,
+        backupEndTime: job.end_time,
+        backupFolderId: job.folderId,
+        operationType: 'Backup',
+        storageType: 'Google Drive',
+        backupType: 'Full',
+        processingOrigin: 'EW server',
+    };
+
+    // For the initial sync, backupObjects will be an empty map or contain only object names
+    // For the final sync, it will contain the field lists
+    const [objectLogs] = await connection.query(
+        "SELECT object_name, status FROM data_transfer_object_log WHERE data_transfer_job_id = ?",
+        [job.id]
+    );
+
+    const backupObjects = {};
+    if (job.status === 'Completed' || job.status === 'FAILED') {
+        // Only include fields on final sync (as in your existing syncBackupToSalesforce)
+        objectLogs.forEach((log) => {
+            try {
+                backupObjects[log.object_name] = JSON.parse(log.status);
+            } catch (e) {
+                console.error(`Failed to parse fields for ${log.object_name}:`, log.status);
+                backupObjects[log.object_name] = [];
+            }
+        });
+    } else {
+         // Initial sync, only send object names with empty field lists
+         objectLogs.forEach((log) => {
+            backupObjects[log.object_name] = [];
+        });
+    }
+
+    const salesforceEndpoint = `${org.instance_url}/services/apexrest/cloudBackup`;
+
+    console.log(`Syncing job ${job.id} with status ${job.status} to Salesforce...`);
+
+    const response = await axios.post(
+        salesforceEndpoint,
+        {
+            backupObjects: backupObjects,
+            configMap: configMap,
+        },
+        {
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${accessToken}`,
+            },
+        }
+    );
+    
+    // Salesforce will return the created/updated Job ID
+    return response.data; // Expecting { message: ..., jobId: 'a0xxxxxxxxxxxxxxx', logCount: ... }
+};
+
 async function uploadToGoogleDriveWithAccessToken(
   filePath,
   fileName,
@@ -151,6 +238,7 @@ const backupController = async (req, res) => {
 
   const connection = await pool.getConnection();
   let dataJobId;
+  let salesforceJobId = null; 
   try {
     console.time("🔑 Fetch Org Details");
     const [orgDetails] = await connection.query(
@@ -237,6 +325,27 @@ const backupController = async (req, res) => {
     console.timeEnd("📝 Insert Job Record");
 
     dataJobId = result.insertId;
+
+     const initialJob = { 
+            id: dataJobId, 
+            job_name: backupName, 
+            description: "Automated backup job", 
+            status: "IN_PROGRESS", 
+            total_objects: Object.keys(backupData).length,
+            folderId: backupNameFolderId,
+            total_records: 0, total_bytes: 0, start_time: new Date(), end_time: null // Placeholder values
+        };
+        
+        console.time("🔄 Initial Sync to Salesforce (IN_PROGRESS)");
+        const syncResult = await syncJobToSalesforce(initialJob, orgDetails, connection);
+        salesforceJobId = syncResult.jobId;
+        console.log(`Salesforce Job ID: ${salesforceJobId}`);
+
+        await connection.query(
+            `UPDATE data_transfer_jobs SET salesforce_job_id = ? WHERE id = ?`,
+            [salesforceJobId, dataJobId]
+        );
+        console.timeEnd("🔄 Initial Sync to Salesforce (IN_PROGRESS)");
     let totalBytes = 0;
 
     const MAX_FILE_SIZE = 250 * 1024 * 1024;
@@ -463,24 +572,69 @@ const backupController = async (req, res) => {
       `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ? WHERE id = ?`,
       [summary.totalRecords, totalBytes, dataJobId]
     );
+
+    const finalJob = {
+            id: dataJobId, 
+            job_name: backupName, 
+            description: "Automated backup job", 
+            status: "Completed", // Final status
+            total_objects: summary.totalObjects,
+            total_records: summary.totalRecords, 
+            total_bytes: totalBytes,
+            start_time: initialJob.start_time, // Use start time from initial job or fetch from DB
+            end_time: new Date(),
+            folderId: backupNameFolderId,
+            salesforce_job_id: salesforceJobId // Pass SF ID for completeness
+        };
+
+        console.time("🔄 Final Sync to Salesforce (Completed)");
+        await syncJobToSalesforce(finalJob, orgDetails, connection);
+        console.timeEnd("🔄 Final Sync to Salesforce (Completed)");
     console.timeEnd("✅ Finalize Job");
 
     return res.status(200).json({
       message: "Backup completed successfully",
       summary,
     });
-  } catch (error) {
-    console.error("Backup error:", error);
-    if (dataJobId) {
-      await connection.query(
-        `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'FAILED' WHERE id = ?`,
-        [dataJobId]
-      );
-    }
-    return res
-      .status(500)
-      .json({ error: "Backup failed", details: error.message });
-  } finally {
+  }  catch (error) {
+        // --- Stage 4 (Error): Finalize MySQL Job (FAILED) & Sync ---
+        await connection.rollback();
+        console.error("Backup error:", error);
+        
+        if (dataJobId) {
+            // Update MySQL to FAILED
+            const failJobQuery = `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'FAILED' WHERE id = ?`;
+            await connection.query(failJobQuery, [dataJobId]);
+            
+            // Sync FAILED status to Salesforce
+            if (salesforceJobId) {
+                try {
+                    const failedJob = {
+                        id: dataJobId, 
+                        job_name: backupName || "Unknown", // Need to ensure backupName is available in scope
+                        description: "Automated backup job", 
+                        status: "FAILED", 
+                        total_objects: summary ? summary.totalObjects : 0, // Use available summary
+                        total_records: summary ? summary.totalRecords : 0, 
+                        total_bytes: totalBytes || 0,
+                        start_time: new Date(), 
+                        end_time: new Date(),
+                        folderId: backupNameFolderId, // Need to ensure folderId is available in scope
+                        salesforce_job_id: salesforceJobId
+                    };
+                    await syncJobToSalesforce(failedJob, orgDetails, connection);
+                    console.log("Failed status successfully synced to Salesforce.");
+                } catch (syncError) {
+                    console.error("Critical error: Failed to sync FAILED status to Salesforce:", syncError);
+                }
+            }
+        }
+        
+        return res.status(500).json({ 
+            error: "Backup failed", 
+            details: error.message 
+        });
+    }finally {
     connection.release();
   }
 };
