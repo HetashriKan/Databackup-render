@@ -12,7 +12,7 @@ const pool = require("../../../config/configuration");
 const { file } = require("googleapis/build/src/apis/file");
 const skippedFields = require("../../../skipField");
 const { Transform } = require("stream");
-const { axios } = require("axios");
+const axios  = require("axios");
 // const __filename = fileURLToPath(import.meta.url);
 // const __dirname = path.dirname(__filename);
 // import key from "../../../server.key" assert { type: "json" };
