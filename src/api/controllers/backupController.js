@@ -12,6 +12,7 @@ const pool = require("../../../config/configuration");
 const { file } = require("googleapis/build/src/apis/file");
 const skippedFields = require("../../../skipField");
 const { Transform } = require("stream");
+const { axios } = require("axios");
 // const __filename = fileURLToPath(import.meta.url);
 // const __dirname = path.dirname(__filename);
 // import key from "../../../server.key" assert { type: "json" };
@@ -74,9 +75,7 @@ const createFolderInGoogleDrive = async (
 
     if (folders.length > 0) {
       const folder = folders[0];
-      console.log(
-        `Folder '${folderName}' already exists. ID: ${folder.id}`
-      );
+      console.log(`Folder '${folderName}' already exists. ID: ${folder.id}`);
       if (folder.capabilities && folder.capabilities.canAddChildren === false) {
         throw new Error(
           `Insufficient permissions for folder '${folderName}'. Cannot add files or folders to it.`
@@ -107,90 +106,100 @@ const createFolderInGoogleDrive = async (
 };
 
 const syncJobToSalesforce = async (job, orgDetails, connection) => {
-    // Re-use the JWT auth logic from getSalesforceAccessToken, but simplify for direct use
-    const org = orgDetails[0];
-    const { client_id, salesforce_api_username, salesforce_api_jwt_private_key, base_url } = org;
+  // Re-use the JWT auth logic from getSalesforceAccessToken, but simplify for direct use
+  const org = orgDetails[0];
+  const {
+    client_id,
+    salesforce_api_username,
+    salesforce_api_jwt_private_key,
+    base_url,
+  } = org;
 
-    const jwtPayload = {
-        iss: client_id,
-        sub: salesforce_api_username,
-        aud: base_url,
-        exp: Math.floor(Date.now() / 1000) + 60 * 3,
-    };
+  const jwtPayload = {
+    iss: client_id,
+    sub: salesforce_api_username,
+    aud: base_url,
+    exp: Math.floor(Date.now() / 1000) + 60 * 3,
+  };
 
-    const token = jwt.sign(jwtPayload, salesforce_api_jwt_private_key, {
-        algorithm: "RS256",
+  const token = jwt.sign(jwtPayload, salesforce_api_jwt_private_key, {
+    algorithm: "RS256",
+  });
+
+  const tokenUrl = `${base_url}/services/oauth2/token`;
+  const params = new URLSearchParams();
+  params.append("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer");
+  params.append("assertion", token);
+  const accessTokenResponse = await axios.post(tokenUrl, params);
+  const accessToken = accessTokenResponse.data.access_token;
+
+  const configMap = {
+    backupName: job.job_name,
+    backupDescription: job.description,
+    backupId: job.id, // MySQL Job ID -> Salesforce External_ID__c
+    backupStatus: job.status,
+    backupTotalObjects: job.total_objects,
+    backupTotalRecords: job.total_records,
+    backupTotalBytes: job.total_bytes,
+    backupStartTime: job.start_time,
+    backupEndTime: job.end_time,
+    backupFolderId: job.folderId,
+    operationType: "Backup",
+    storageType: "Google Drive",
+    backupType: "Full",
+    processingOrigin: "EW server",
+  };
+
+  // For the initial sync, backupObjects will be an empty map or contain only object names
+  // For the final sync, it will contain the field lists
+  const [objectLogs] = await connection.query(
+    "SELECT object_name, status FROM data_transfer_object_log WHERE data_transfer_job_id = ?",
+    [job.id]
+  );
+
+  const backupObjects = {};
+  if (job.status === "Completed" || job.status === "FAILED") {
+    // Only include fields on final sync (as in your existing syncBackupToSalesforce)
+    objectLogs.forEach((log) => {
+      try {
+        backupObjects[log.object_name] = JSON.parse(log.status);
+      } catch (e) {
+        console.error(
+          `Failed to parse fields for ${log.object_name}:`,
+          log.status
+        );
+        backupObjects[log.object_name] = [];
+      }
     });
+  } else {
+    // Initial sync, only send object names with empty field lists
+    objectLogs.forEach((log) => {
+      backupObjects[log.object_name] = [];
+    });
+  }
 
-    const tokenUrl = `${base_url}/services/oauth2/token`;
-    const params = new URLSearchParams();
-    params.append("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer");
-    params.append("assertion", token);
-    const accessTokenResponse = await axios.post(tokenUrl, params);
-    const accessToken = accessTokenResponse.data.access_token;
+  const salesforceEndpoint = `${org.instance_url}/services/apexrest/cloudBackup`;
 
-    const configMap = {
-        backupName: job.job_name,
-        backupDescription: job.description,
-        backupId: job.id, // MySQL Job ID -> Salesforce External_ID__c
-        backupStatus: job.status,
-        backupTotalObjects: job.total_objects,
-        backupTotalRecords: job.total_records,
-        backupTotalBytes: job.total_bytes,
-        backupStartTime: job.start_time,
-        backupEndTime: job.end_time,
-        backupFolderId: job.folderId,
-        operationType: 'Backup',
-        storageType: 'Google Drive',
-        backupType: 'Full',
-        processingOrigin: 'EW server',
-    };
+  console.log(
+    `Syncing job ${job.id} with status ${job.status} to Salesforce...`
+  );
 
-    // For the initial sync, backupObjects will be an empty map or contain only object names
-    // For the final sync, it will contain the field lists
-    const [objectLogs] = await connection.query(
-        "SELECT object_name, status FROM data_transfer_object_log WHERE data_transfer_job_id = ?",
-        [job.id]
-    );
-
-    const backupObjects = {};
-    if (job.status === 'Completed' || job.status === 'FAILED') {
-        // Only include fields on final sync (as in your existing syncBackupToSalesforce)
-        objectLogs.forEach((log) => {
-            try {
-                backupObjects[log.object_name] = JSON.parse(log.status);
-            } catch (e) {
-                console.error(`Failed to parse fields for ${log.object_name}:`, log.status);
-                backupObjects[log.object_name] = [];
-            }
-        });
-    } else {
-         // Initial sync, only send object names with empty field lists
-         objectLogs.forEach((log) => {
-            backupObjects[log.object_name] = [];
-        });
+  const response = await axios.post(
+    salesforceEndpoint,
+    {
+      backupObjects: backupObjects,
+      configMap: configMap,
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
     }
+  );
 
-    const salesforceEndpoint = `${org.instance_url}/services/apexrest/cloudBackup`;
-
-    console.log(`Syncing job ${job.id} with status ${job.status} to Salesforce...`);
-
-    const response = await axios.post(
-        salesforceEndpoint,
-        {
-            backupObjects: backupObjects,
-            configMap: configMap,
-        },
-        {
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${accessToken}`,
-            },
-        }
-    );
-    
-    // Salesforce will return the created/updated Job ID
-    return response.data; // Expecting { message: ..., jobId: 'a0xxxxxxxxxxxxxxx', logCount: ... }
+  // Salesforce will return the created/updated Job ID
+  return response.data; // Expecting { message: ..., jobId: 'a0xxxxxxxxxxxxxxx', logCount: ... }
 };
 
 async function uploadToGoogleDriveWithAccessToken(
@@ -238,7 +247,7 @@ const backupController = async (req, res) => {
 
   const connection = await pool.getConnection();
   let dataJobId;
-  let salesforceJobId = null; 
+  let salesforceJobId = null;
   try {
     console.time("🔑 Fetch Org Details");
     const [orgDetails] = await connection.query(
@@ -270,7 +279,7 @@ const backupController = async (req, res) => {
       algorithm: "RS256",
     });
 
-    console.log('signed JWT ' + signedJWT);
+    console.log("signed JWT " + signedJWT);
     const conn = new Connection({ loginUrl: org.base_url, maxFetch: 500 });
     await conn.authorize({
       grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -294,7 +303,7 @@ const backupController = async (req, res) => {
 
     await connection.query(
       `UPDATE drive_accounts d JOIN org_drive_mappings m ON d.id = m.drive_account_id SET d.default_root_folder = ? WHERE m.org_id = ?`,
-      [rootFolderId,  orgDetails.id]
+      [rootFolderId, orgDetails.id]
     );
 
     const backupNameFolderId = await createFolderInGoogleDrive(
@@ -326,26 +335,33 @@ const backupController = async (req, res) => {
 
     dataJobId = result.insertId;
 
-     const initialJob = { 
-            id: dataJobId, 
-            job_name: backupName, 
-            description: "Automated backup job", 
-            status: "IN_PROGRESS", 
-            total_objects: Object.keys(backupData).length,
-            folderId: backupNameFolderId,
-            total_records: 0, total_bytes: 0, start_time: new Date(), end_time: null // Placeholder values
-        };
-        
-        console.time("🔄 Initial Sync to Salesforce (IN_PROGRESS)");
-        const syncResult = await syncJobToSalesforce(initialJob, orgDetails, connection);
-        salesforceJobId = syncResult.jobId;
-        console.log(`Salesforce Job ID: ${salesforceJobId}`);
+    const initialJob = {
+      id: dataJobId,
+      job_name: backupName,
+      description: "Automated backup job",
+      status: "IN_PROGRESS",
+      total_objects: Object.keys(backupData).length,
+      folderId: backupNameFolderId,
+      total_records: 0,
+      total_bytes: 0,
+      start_time: new Date(),
+      end_time: null, // Placeholder values
+    };
 
-        await connection.query(
-            `UPDATE data_transfer_jobs SET salesforce_job_id = ? WHERE id = ?`,
-            [salesforceJobId, dataJobId]
-        );
-        console.timeEnd("🔄 Initial Sync to Salesforce (IN_PROGRESS)");
+    console.time("🔄 Initial Sync to Salesforce (IN_PROGRESS)");
+    const syncResult = await syncJobToSalesforce(
+      initialJob,
+      orgDetails,
+      connection
+    );
+    salesforceJobId = syncResult.jobId;
+    console.log(`Salesforce Job ID: ${salesforceJobId}`);
+
+    await connection.query(
+      `UPDATE data_transfer_jobs SET salesforce_job_id = ? WHERE id = ?`,
+      [salesforceJobId, dataJobId]
+    );
+    console.timeEnd("🔄 Initial Sync to Salesforce (IN_PROGRESS)");
     let totalBytes = 0;
 
     const MAX_FILE_SIZE = 250 * 1024 * 1024;
@@ -438,107 +454,108 @@ const backupController = async (req, res) => {
       // }
 
       let allRecords = [];
-      let queryResult = await conn.query(soql);
-      allRecords = allRecords.concat(queryResult.records);
+      let queryResult = await conn.query(soql);
+      allRecords = allRecords.concat(queryResult.records);
 
-      while (!queryResult.done) {
-        queryResult = await conn.queryMore(queryResult.nextRecordsUrl);
-        allRecords = allRecords.concat(queryResult.records);
-      }
+      while (!queryResult.done) {
+        queryResult = await conn.queryMore(queryResult.nextRecordsUrl);
+        allRecords = allRecords.concat(queryResult.records);
+      }
 
-      summary.totalObjects++;
-      summary.totalRecords += allRecords.length;
+      summary.totalObjects++;
+      summary.totalRecords += allRecords.length;
 
-      let objectFileSize = 0;
-      let recordsInObject = allRecords.length;
+      let objectFileSize = 0;
+      let recordsInObject = allRecords.length;
 
-      if (recordsInObject > 0) {
-        console.time(`🔎 CSV Generation and Upload for ${objectName}`);
-        let filePart = 1;
-        let currentFilePath;
-        let currentWriteStream;
-        let currentCsvStream;
-        let recordsInCurrentFile = 0;
-        let fileSizeTracker = 0;
-        let fileOpenPromise = Promise.resolve();
+      if (recordsInObject > 0) {
+        console.time(`🔎 CSV Generation and Upload for ${objectName}`);
+        let filePart = 1;
+        let currentFilePath;
+        let currentWriteStream;
+        let currentCsvStream;
+        let recordsInCurrentFile = 0;
+        let fileSizeTracker = 0;
+        let fileOpenPromise = Promise.resolve();
 
-        const createNewFile = () => {
-          const fileName = `${objectName}_${filePart}.csv`;
-          currentFilePath = path.join(tempDir, fileName);
-          currentWriteStream = fs.createWriteStream(currentFilePath);
-          // Using the original `csv.format` since the streaming logic was replaced with `conn.query` and manual pagination.
-          currentCsvStream = csv.format({ headers: true });
-          currentCsvStream.pipe(currentWriteStream);
-          recordsInCurrentFile = 0;
-          fileSizeTracker = 0; // Reset size tracker for the new file
-        };
-        
-        const closeAndUploadFile = async () => {
-          if (recordsInCurrentFile > 0) {
-            await new Promise((resolve, reject) => {
-              currentCsvStream.end();
-              currentWriteStream.on("finish", resolve);
-              currentWriteStream.on("error", reject);
-            });
+        const createNewFile = () => {
+          const fileName = `${objectName}_${filePart}.csv`;
+          currentFilePath = path.join(tempDir, fileName);
+          currentWriteStream = fs.createWriteStream(currentFilePath); // Using the original `csv.format` since the streaming logic was replaced with `conn.query` and manual pagination.
+          currentCsvStream = csv.format({ headers: true });
+          currentCsvStream.pipe(currentWriteStream);
+          recordsInCurrentFile = 0;
+          fileSizeTracker = 0; // Reset size tracker for the new file
+        };
+        const closeAndUploadFile = async () => {
+          if (recordsInCurrentFile > 0) {
+            await new Promise((resolve, reject) => {
+              currentCsvStream.end();
+              currentWriteStream.on("finish", resolve);
+              currentWriteStream.on("error", reject);
+            });
 
-            const currentFileSize = fs.statSync(currentFilePath).size;
-            objectFileSize += currentFileSize;
-            totalBytes += currentFileSize; 
+            const currentFileSize = fs.statSync(currentFilePath).size;
+            objectFileSize += currentFileSize;
+            totalBytes += currentFileSize;
 
-            console.log(`☁️ Uploading ${path.basename(currentFilePath)} (${(currentFileSize / (1024 * 1024)).toFixed(2)} MB)`);
-            await uploadToGoogleDriveWithAccessToken(
-              currentFilePath,
-              path.basename(currentFilePath),
-              objectNameFolderId,
-              ACCESS_TOKEN
-            );
-            fs.unlinkSync(currentFilePath);
-          }
-        };
+            console.log(
+              `☁️ Uploading ${path.basename(currentFilePath)} (${(
+                currentFileSize /
+                (1024 * 1024)
+              ).toFixed(2)} MB)`
+            );
+            await uploadToGoogleDriveWithAccessToken(
+              currentFilePath,
+              path.basename(currentFilePath),
+              objectNameFolderId,
+              ACCESS_TOKEN
+            );
+            fs.unlinkSync(currentFilePath);
+          }
+        };
 
-        createNewFile();
+        createNewFile();
 
-        for (const record of allRecords) {
-          const { attributes, ...rest } = record;
-          
-          // Estimate row size for file splitting logic
-          const headerlessRow = Object.values(rest).join(",");
-          const rowString = recordsInCurrentFile === 0 ? Object.keys(rest).join(",") + "\n" + headerlessRow + "\n" : headerlessRow + "\n";
-          const rowSize = Buffer.byteLength(rowString, 'utf8');
+        for (const record of allRecords) {
+          const { attributes, ...rest } = record; // Estimate row size for file splitting logic
+          const headerlessRow = Object.values(rest).join(",");
+          const rowString =
+            recordsInCurrentFile === 0
+              ? Object.keys(rest).join(",") + "\n" + headerlessRow + "\n"
+              : headerlessRow + "\n";
+          const rowSize = Buffer.byteLength(rowString, "utf8");
 
-          if (fileSizeTracker + rowSize > MAX_FILE_SIZE) {
-            // Close and upload the current file
-            await closeAndUploadFile();
+          if (fileSizeTracker + rowSize > MAX_FILE_SIZE) {
+            // Close and upload the current file
+            await closeAndUploadFile(); // Start a new file
 
-            // Start a new file
-            filePart++;
-            createNewFile();
-            
-            // Recalculate size for the new file to include headers
-            const newFileHeaderRow = Object.keys(rest).join(",") + "\n";
-            const newFileHeaderSize = Buffer.byteLength(newFileHeaderRow, 'utf8');
-            fileSizeTracker += newFileHeaderSize;
-          }
+            filePart++;
+            createNewFile(); // Recalculate size for the new file to include headers
+            const newFileHeaderRow = Object.keys(rest).join(",") + "\n";
+            const newFileHeaderSize = Buffer.byteLength(
+              newFileHeaderRow,
+              "utf8"
+            );
+            fileSizeTracker += newFileHeaderSize;
+          }
 
-          currentCsvStream.write(rest);
-          
-          if (recordsInCurrentFile === 0) {
-            // On first record, account for both data and header size
-            const headerRow = Object.keys(rest).join(",") + "\n";
-            fileSizeTracker += Buffer.byteLength(headerRow, 'utf8');
-            fileSizeTracker += Buffer.byteLength(headerlessRow + "\n", 'utf8');
-          } else {
-            fileSizeTracker += Buffer.byteLength(headerlessRow + "\n", 'utf8');
-          }
+          currentCsvStream.write(rest);
+          if (recordsInCurrentFile === 0) {
+            // On first record, account for both data and header size
+            const headerRow = Object.keys(rest).join(",") + "\n";
+            fileSizeTracker += Buffer.byteLength(headerRow, "utf8");
+            fileSizeTracker += Buffer.byteLength(headerlessRow + "\n", "utf8");
+          } else {
+            fileSizeTracker += Buffer.byteLength(headerlessRow + "\n", "utf8");
+          }
 
-          recordsInCurrentFile++;
-        }
+          recordsInCurrentFile++;
+        } // Final close and upload for the last file part
 
-        // Final close and upload for the last file part
-        await closeAndUploadFile();
-        console.timeEnd(`🔎 CSV Generation and Upload for ${objectName}`);
-      }
-
+        await closeAndUploadFile();
+        console.timeEnd(`🔎 CSV Generation and Upload for ${objectName}`);
+      }
 
       console.time(`📝 Insert Log for ${objectName}`);
       const fields = soql
@@ -574,67 +591,70 @@ const backupController = async (req, res) => {
     );
 
     const finalJob = {
-            id: dataJobId, 
-            job_name: backupName, 
-            description: "Automated backup job", 
-            status: "Completed", // Final status
-            total_objects: summary.totalObjects,
-            total_records: summary.totalRecords, 
-            total_bytes: totalBytes,
-            start_time: initialJob.start_time, // Use start time from initial job or fetch from DB
-            end_time: new Date(),
-            folderId: backupNameFolderId,
-            salesforce_job_id: salesforceJobId // Pass SF ID for completeness
-        };
+      id: dataJobId,
+      job_name: backupName,
+      description: "Automated backup job",
+      status: "Completed", // Final status
+      total_objects: summary.totalObjects,
+      total_records: summary.totalRecords,
+      total_bytes: totalBytes,
+      start_time: initialJob.start_time, // Use start time from initial job or fetch from DB
+      end_time: new Date(),
+      folderId: backupNameFolderId,
+      salesforce_job_id: salesforceJobId, // Pass SF ID for completeness
+    };
 
-        console.time("🔄 Final Sync to Salesforce (Completed)");
-        await syncJobToSalesforce(finalJob, orgDetails, connection);
-        console.timeEnd("🔄 Final Sync to Salesforce (Completed)");
+    console.time("🔄 Final Sync to Salesforce (Completed)");
+    await syncJobToSalesforce(finalJob, orgDetails, connection);
+    console.timeEnd("🔄 Final Sync to Salesforce (Completed)");
     console.timeEnd("✅ Finalize Job");
 
     return res.status(200).json({
       message: "Backup completed successfully",
       summary,
     });
-  }  catch (error) {
-        // --- Stage 4 (Error): Finalize MySQL Job (FAILED) & Sync ---
-        await connection.rollback();
-        console.error("Backup error:", error);
-        
-        if (dataJobId) {
-            // Update MySQL to FAILED
-            const failJobQuery = `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'FAILED' WHERE id = ?`;
-            await connection.query(failJobQuery, [dataJobId]);
-            
-            // Sync FAILED status to Salesforce
-            if (salesforceJobId) {
-                try {
-                    const failedJob = {
-                        id: dataJobId, 
-                        job_name: backupName || "Unknown", // Need to ensure backupName is available in scope
-                        description: "Automated backup job", 
-                        status: "FAILED", 
-                        total_objects: summary ? summary.totalObjects : 0, // Use available summary
-                        total_records: summary ? summary.totalRecords : 0, 
-                        total_bytes: totalBytes || 0,
-                        start_time: new Date(), 
-                        end_time: new Date(),
-                        folderId: backupNameFolderId, // Need to ensure folderId is available in scope
-                        salesforce_job_id: salesforceJobId
-                    };
-                    await syncJobToSalesforce(failedJob, orgDetails, connection);
-                    console.log("Failed status successfully synced to Salesforce.");
-                } catch (syncError) {
-                    console.error("Critical error: Failed to sync FAILED status to Salesforce:", syncError);
-                }
-            }
+  } catch (error) {
+    // --- Stage 4 (Error): Finalize MySQL Job (FAILED) & Sync ---
+    await connection.rollback();
+    console.error("Backup error:", error);
+
+    if (dataJobId) {
+      // Update MySQL to FAILED
+      const failJobQuery = `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'FAILED' WHERE id = ?`;
+      await connection.query(failJobQuery, [dataJobId]);
+
+      // Sync FAILED status to Salesforce
+      if (salesforceJobId) {
+        try {
+          const failedJob = {
+            id: dataJobId,
+            job_name: backupName || "Unknown", // Need to ensure backupName is available in scope
+            description: "Automated backup job",
+            status: "FAILED",
+            total_objects: summary ? summary.totalObjects : 0, // Use available summary
+            total_records: summary ? summary.totalRecords : 0,
+            total_bytes: totalBytes || 0,
+            start_time: new Date(),
+            end_time: new Date(),
+            folderId: backupNameFolderId, // Need to ensure folderId is available in scope
+            salesforce_job_id: salesforceJobId,
+          };
+          await syncJobToSalesforce(failedJob, orgDetails, connection);
+          console.log("Failed status successfully synced to Salesforce.");
+        } catch (syncError) {
+          console.error(
+            "Critical error: Failed to sync FAILED status to Salesforce:",
+            syncError
+          );
         }
-        
-        return res.status(500).json({ 
-            error: "Backup failed", 
-            details: error.message 
-        });
-    }finally {
+      }
+    }
+
+    return res.status(500).json({
+      error: "Backup failed",
+      details: error.message,
+    });
+  } finally {
     connection.release();
   }
 };
