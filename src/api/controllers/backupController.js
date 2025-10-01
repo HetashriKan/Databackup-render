@@ -12,7 +12,7 @@ const pool = require("../../../config/configuration");
 const { file } = require("googleapis/build/src/apis/file");
 const skippedFields = require("../../../skipField");
 const { Transform } = require("stream");
-const axios  = require("axios");
+const axios = require("axios");
 // const __filename = fileURLToPath(import.meta.url);
 // const __dirname = path.dirname(__filename);
 // import key from "../../../server.key" assert { type: "json" };
@@ -153,28 +153,31 @@ const syncJobToSalesforce = async (job, orgDetails, connection) => {
   // For the initial sync, backupObjects will be an empty map or contain only object names
   // For the final sync, it will contain the field lists
   const [objectLogs] = await connection.query(
-    "SELECT object_name, status FROM data_transfer_object_log WHERE data_transfer_job_id = ?",
+    "SELECT id, object_name, status, estimated_size, folderId FROM data_transfer_object_log WHERE data_transfer_job_id = ?",
     [job.id]
   );
+  const logsToSync = [];
 
-  const backupObjects = {};
+  // Process logs only on final status where data is complete
   if (job.status === "Completed" || job.status === "FAILED") {
-    // Only include fields on final sync (as in your existing syncBackupToSalesforce)
     objectLogs.forEach((log) => {
       try {
-        backupObjects[log.object_name] = JSON.parse(log.status);
+        const fields = JSON.parse(log.status);
+        logsToSync.push({
+          // MySQL Log ID will be the External ID for the Salesforce Log record
+          mysql_log_id: log.id,
+          object_name: log.object_name,
+          fields_count: fields.length,
+          selected_fields: fields, // Send the array of field names
+          estimated_size: log.estimated_size,
+          folderId: log.folderId,
+        });
       } catch (e) {
         console.error(
-          `Failed to parse fields for ${log.object_name}:`,
+          `Failed to parse fields for ${log.object_name} (Log ID: ${log.id}):`,
           log.status
         );
-        backupObjects[log.object_name] = [];
       }
-    });
-  } else {
-    // Initial sync, only send object names with empty field lists
-    objectLogs.forEach((log) => {
-      backupObjects[log.object_name] = [];
     });
   }
 
@@ -187,8 +190,9 @@ const syncJobToSalesforce = async (job, orgDetails, connection) => {
   const response = await axios.post(
     salesforceEndpoint,
     {
-      backupObjects: backupObjects,
       configMap: configMap,
+      // Pass the detailed logs array
+      objectLogs: logsToSync,
     },
     {
       headers: {
@@ -198,8 +202,7 @@ const syncJobToSalesforce = async (job, orgDetails, connection) => {
     }
   );
 
-  // Salesforce will return the created/updated Job ID
-  return response.data; // Expecting { message: ..., jobId: 'a0xxxxxxxxxxxxxxx', logCount: ... }
+  return response.data;
 };
 
 async function uploadToGoogleDriveWithAccessToken(
@@ -248,9 +251,14 @@ const backupController = async (req, res) => {
   const connection = await pool.getConnection();
   let dataJobId;
   let salesforceJobId = null;
+  const summary = { totalObjects: 0, totalRecords: 0 };
+  let totalBytes = 0;
+  let failedBackupNameFolderId;
+  let orgDetails;
+
   try {
     console.time("🔑 Fetch Org Details");
-    const [orgDetails] = await connection.query(
+    [orgDetails] = await connection.query(
       `SELECT o.id, o.org_id, o.client_id, o.salesforce_api_username, o.salesforce_api_jwt_private_key, o.base_url, o.instance_url,
        d.google_access_token, d.id, m.id AS drive_account_id FROM salesforce_orgs o
        JOIN org_drive_mappings m ON o.id = m.org_id
@@ -287,7 +295,6 @@ const backupController = async (req, res) => {
     });
     console.timeEnd("🔐 Salesforce Auth");
 
-    const summary = { totalObjects: 0, totalRecords: 0 };
     const tempDir = path.join(__dirname, "../../../temp");
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
@@ -311,6 +318,7 @@ const backupController = async (req, res) => {
       rootFolderId,
       ACCESS_TOKEN
     );
+    failedBackupNameFolderId = backupNameFolderId;
     console.timeEnd("📂 Create Root & Backup Folders");
 
     console.time("📝 Insert Job Record");
@@ -362,7 +370,6 @@ const backupController = async (req, res) => {
       [salesforceJobId, dataJobId]
     );
     console.timeEnd("🔄 Initial Sync to Salesforce (IN_PROGRESS)");
-    let totalBytes = 0;
 
     const MAX_FILE_SIZE = 250 * 1024 * 1024;
 
@@ -562,19 +569,23 @@ const backupController = async (req, res) => {
         .match(/SELECT (.*) FROM/i)[1]
         .split(",")
         .map((f) => f.trim());
+
+      // Set the proper log status (since the job is completed for this object)
+      const objectLogStatus = "COMPLETED";
+
       await connection.query(
-        `INSERT INTO data_transfer_object_log (data_transfer_job_id, object_name, fields_count, estimated_size, status, folderId, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        `INSERT INTO data_transfer_object_log (data_transfer_job_id, object_name, fields_count, estimated_size, status, fields_list, folderId, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`, // <-- Cleaned up: Removed leading tabs/spaces
         [
           dataJobId,
           objectName,
           fields.length,
           objectFileSize,
+          objectLogStatus,
           JSON.stringify(fields),
           objectNameFolderId,
         ]
       );
-      console.timeEnd(`📝 Insert Log for ${objectName}`);
 
       totalBytes += objectFileSize;
 
@@ -636,7 +647,7 @@ const backupController = async (req, res) => {
             total_bytes: totalBytes || 0,
             start_time: new Date(),
             end_time: new Date(),
-            folderId: backupNameFolderId, // Need to ensure folderId is available in scope
+            folderId: failedBackupNameFolderId, // Need to ensure folderId is available in scope
             salesforce_job_id: salesforceJobId,
           };
           await syncJobToSalesforce(failedJob, orgDetails, connection);

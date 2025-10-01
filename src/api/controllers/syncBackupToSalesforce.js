@@ -61,6 +61,8 @@ const syncBackupToSalesforce = async (req, res) => {
       [job.id]
     );
 
+    console.log("objectLogs", objectLogs);
+
     const orgDetails = await connection.query(
       `SELECT o.id, o.org_id, o.client_id, o.salesforce_api_username, o.salesforce_api_jwt_private_key, o.base_url, o.instance_url,
        d.google_access_token, d.id, m.id AS drive_account_id FROM salesforce_orgs o
@@ -74,15 +76,26 @@ const syncBackupToSalesforce = async (req, res) => {
     const accessToken = await getSalesforceAccessToken(orgDetails);
     console.log("Salesforce Access Token obtained:", accessToken);
     const backupObjects = {};
+    const logsToSync = [];
     objectLogs.forEach((log) => {
       try {
+        console.log("log @@", log);
         // The field list is now stored as a JSON string in the 'status' column.
-        const fields = JSON.parse(log.status);
-        backupObjects[log.object_name] = fields;
+        const fields = JSON.parse(log.fields_list);
+        
+        logsToSync.push({
+            // Assuming you want to pass this structure for a complete log sync:
+            mysql_log_id: log.id, 
+            object_name: log.object_name,
+            status: log.status, // Now contains 'COMPLETED' or 'FAILED'
+            fields_count: fields.length,
+            selected_fields: fields, 
+            estimated_size: log.estimated_size,
+            folderId: log.folderId
+        });
       } catch (e) {
-        console.error(`Failed to parse fields for ${log.object_name}:`, log.status);
-        backupObjects[log.object_name] = [];
-      }
+        console.error(`Failed to parse fields for ${log.object_name}:`, log.fields_list);
+      }
     });
 
     
@@ -106,12 +119,12 @@ const syncBackupToSalesforce = async (req, res) => {
 
     const salesforceEndpoint = `${orgDetails[0][0].instance_url}/services/apexrest/cloudBackup`; 
     console.log("salesforceEndpoint", salesforceEndpoint);
-    console.log("backupObjects", backupObjects);
+    console.log("logsToSync", logsToSync);
     console.log("configMap", configMap);
     await axios.post(
       salesforceEndpoint,
       {
-        backupObjects: backupObjects,
+        objectLogs: logsToSync,
         configMap: configMap,
       },
       {
