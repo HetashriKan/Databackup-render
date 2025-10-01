@@ -251,10 +251,10 @@ const backupController = async (req, res) => {
   const connection = await pool.getConnection();
   let dataJobId;
   let salesforceJobId = null;
-  const summary = { totalObjects: 0, totalRecords: 0 };
   let totalBytes = 0;
   let failedBackupNameFolderId;
   let orgDetails;
+  const summary = { totalObjects: 0, totalRecords: 0 };
 
   try {
     console.time("🔑 Fetch Org Details");
@@ -405,61 +405,6 @@ const backupController = async (req, res) => {
           soql.substring(fromIndex);
       }
 
-      // console.time(`🔎 Query and CSV Generation for ${objectName}`);
-      // const fileName = `${objectName}.csv`;
-      // const filePath = path.join(tempDir, fileName);
-      // const writeStream = fs.createWriteStream(filePath);
-      // var stats = fs.statSync(filePath);
-      // var fileSizeInBytes = stats.size;
-      // console.log('file sieze ' + fileSizeInBytes)
-      // const csvStream = csv.format({ headers: true });
-
-      // let recordCount = 0;
-      // const countAndTransform = new Transform({
-      //   objectMode: true,
-      //   transform(record, encoding, callback) {
-      //     recordCount++;
-      //     const { attributes, ...rest } = record;
-      //     this.push(rest);
-      //     callback();
-      //   },
-      // });
-
-      // const sfQueryStream = conn.query(soql);
-
-      // await new Promise((resolve, reject) => {
-      //   writeStream.on("finish", resolve);
-      //   writeStream.on("error", reject);
-      //   sfQueryStream
-      //     .on("error", reject)
-      //     .pipe(countAndTransform)
-      //     .on("error", reject)
-      //     .pipe(csvStream)
-      //     .on("error", reject)
-      //     .pipe(writeStream);
-      // });
-      // console.timeEnd(`🔎 Query and CSV Generation for ${objectName}`);
-
-      // summary.totalObjects++;
-      // summary.totalRecords += recordCount;
-
-      // let objectFileSize = 0;
-
-      // if (recordCount > 0) {
-      //   objectFileSize = fs.statSync(filePath).size;
-
-      //   console.time(`☁️ Upload ${objectName} to Drive`);
-      //   await uploadToGoogleDriveWithAccessToken(
-      //     filePath,
-      //     fileName,
-      //     objectNameFolderId,
-      //     ACCESS_TOKEN
-      //   );
-      //   console.timeEnd(`☁️ Upload ${objectName} to Drive`);
-
-      //   fs.unlinkSync(filePath);
-      // }
-
       let allRecords = [];
       let queryResult = await conn.query(soql);
       allRecords = allRecords.concat(queryResult.records);
@@ -468,6 +413,8 @@ const backupController = async (req, res) => {
         queryResult = await conn.queryMore(queryResult.nextRecordsUrl);
         allRecords = allRecords.concat(queryResult.records);
       }
+
+      const currentObjectRecordCount = allRecords.length;
 
       summary.totalObjects++;
       summary.totalRecords += allRecords.length;
@@ -574,8 +521,8 @@ const backupController = async (req, res) => {
       const objectLogStatus = "COMPLETED";
 
       await connection.query(
-        `INSERT INTO data_transfer_object_log (data_transfer_job_id, object_name, fields_count, estimated_size, status, fields_list, folderId, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`, // <-- Cleaned up: Removed leading tabs/spaces
+        `INSERT INTO data_transfer_object_log (data_transfer_job_id, object_name, fields_count, estimated_size, status, fields_list, folderId, created_at, updated_at, record_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)`, // <-- Cleaned up: Removed leading tabs/spaces
         [
           dataJobId,
           objectName,
@@ -584,10 +531,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`, // <-- Cleaned up: Removed leading 
           objectLogStatus,
           JSON.stringify(fields),
           objectNameFolderId,
+          currentObjectRecordCount,
         ]
       );
 
-      totalBytes += objectFileSize;
+      // totalBytes += objectFileSize;
 
       console.log(
         `⏱️ Total time for ${objectName}: ${(Date.now() - stepStart) / 1000}s`
