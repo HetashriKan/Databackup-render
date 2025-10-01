@@ -144,6 +144,7 @@ const syncJobToSalesforce = async (job, orgDetails, connection) => {
     backupStartTime: job.start_time,
     backupEndTime: job.end_time,
     backupFolderId: job.folderId,
+    backupTotalProcessedRecords: job.total_processed_records,
     operationType: "Backup",
     storageType: "Google Drive",
     backupType: "Full",
