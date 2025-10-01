@@ -6,6 +6,7 @@ const router = express.Router();
 const { google } = require("googleapis");
 const pool = require("../../../config/configuration");
 const { randomUUID } = require("crypto");
+const syncBackupToSalesforce = require('../controllers/syncBackupToSalesforce');
 
 let oauth2Client;
 const Id = randomUUID();
@@ -14,6 +15,7 @@ router.use("/backup", require("./backup"));
 router.use("/register", require("./register"));
 router.use("/refresh-token", require("./refreshAccessToken"));
 router.use("/sync-status", require("./syncStatus"));
+router.use("/sync-backup-to-salesforce", syncBackupToSalesforce);
 
 // /api/health
 router.route("/health").get(async (req, res) => {
