@@ -254,7 +254,7 @@ const backupController = async (req, res) => {
   let totalBytes = 0;
   let failedBackupNameFolderId;
   let orgDetails;
-  const summary = { totalObjects: 0, totalRecords: 0 };
+  const summary = { totalObjects: 0, totalRecords: 0,totalProcessed: 0 };
 
   try {
     console.time("🔑 Fetch Org Details");
@@ -415,9 +415,10 @@ const backupController = async (req, res) => {
       }
 
       const currentObjectRecordCount = allRecords.length;
+      const recordsFetchedFromSalesforce = allRecords.length; 
 
       summary.totalObjects++;
-      summary.totalRecords += allRecords.length;
+      summary.totalRecords += recordsFetchedFromSalesforce;
 
       let objectFileSize = 0;
       let recordsInObject = allRecords.length;
@@ -510,6 +511,8 @@ const backupController = async (req, res) => {
         await closeAndUploadFile();
         console.timeEnd(`🔎 CSV Generation and Upload for ${objectName}`);
       }
+      const successfullyProcessedRecords = recordsInObject; 
+      summary.totalProcessed += successfullyProcessedRecords;
 
       console.time(`📝 Insert Log for ${objectName}`);
       const fields = soql
@@ -545,8 +548,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)`, // <-- Cleaned up: Removed leadi
     console.time("✅ Finalize Job");
     console.log("Summary:", JSON.stringify(summary));
     await connection.query(
-      `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ? WHERE id = ?`,
-      [summary.totalRecords, totalBytes, dataJobId]
+      `UPDATE data_transfer_jobs SET end_time = NOW(), status = 'Completed', total_records = ?, total_bytes = ?, total_record_processed = ? WHERE id = ?`,
+      [summary.totalRecords, totalBytes, summary.totalProcessed, dataJobId]
     );
 
     const finalJob = {
@@ -556,6 +559,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)`, // <-- Cleaned up: Removed leadi
       status: "Completed", // Final status
       total_objects: summary.totalObjects,
       total_records: summary.totalRecords,
+      total_record_processed: summary.totalProcessed,
       total_bytes: totalBytes,
       start_time: initialJob.start_time, // Use start time from initial job or fetch from DB
       end_time: new Date(),
