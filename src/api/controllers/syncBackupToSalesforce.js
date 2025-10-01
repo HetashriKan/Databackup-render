@@ -111,6 +111,7 @@ const syncBackupToSalesforce = async (req, res) => {
         backupStartTime: job.start_time,
         backupEndTime: job.end_time,
         backupFolderId: job.folderId,
+        backupTotalProcessedRecords: job.total_record_processed,
         operationType: 'Backup',
         storageType: 'Google Drive', 
         backupType: 'Full',
